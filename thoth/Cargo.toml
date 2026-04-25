@@ -1,0 +1,23 @@
+[package]
+name = "thoth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dioxus = { version = "0.7", features = ["desktop"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+hf-hub = "0.3"
+directories = "5"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[build-dependencies]
+bindgen = "0.69"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

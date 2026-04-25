@@ -1,0 +1,10 @@
+[application]
+name = "Thoth"
+default_platform = "desktop"
+
+[web.app]
+title = "Thoth"
+
+[web.watcher]
+
+[web.build]
