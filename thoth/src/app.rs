@@ -21,10 +21,10 @@ impl Theme {
             Theme::Dark => Theme::Light,
         }
     }
-    fn bg(&self) -> &'static str { match self { Theme::Light => "#ffffff", Theme::Dark => "#1e1e1e" } }
-    fn fg(&self) -> &'static str { match self { Theme::Light => "#1a1a1a", Theme::Dark => "#e0e0e0" } }
-    fn panel(&self) -> &'static str { match self { Theme::Light => "#f5f5f5", Theme::Dark => "#252526" } }
-    fn border(&self) -> &'static str { match self { Theme::Light => "#ddd", Theme::Dark => "#333" } }
+    fn bg(&self) -> &'static str { match self { Theme::Light => "#fafafa", Theme::Dark => "#0d0d0d" } }
+    fn fg(&self) -> &'static str { match self { Theme::Light => "#171717", Theme::Dark => "#ededed" } }
+    fn panel(&self) -> &'static str { match self { Theme::Light => "#f0f0f0", Theme::Dark => "#1a1a1a" } }
+    fn border(&self) -> &'static str { match self { Theme::Light => "#e5e5e5", Theme::Dark => "#262626" } }
 }
 
 pub fn App() -> Element {
@@ -286,7 +286,7 @@ style: "flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0
                         style: format!(
                             "padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; align-self: {}; background: {}; word-wrap: break-word;",
                             match msg.role { MessageRole::User => "flex-end", _ => "flex-start" },
-                            match msg.role { MessageRole::User => "#0d6efd", MessageRole::Assistant => current_theme.panel(), MessageRole::System => "#5c2d2d" }
+                            match msg.role { MessageRole::User => "#3b82f6", MessageRole::Assistant => current_theme.panel(), MessageRole::System => "#5c2d2d" }
                         ),
 if !msg.thinking.is_empty() {
                         pre { style: "margin: 0 0 0.25rem 0; white-space: pre-wrap; font-family: inherit; font-weight: 300; font-style: italic; opacity: 0.8;", "{msg.thinking}" }
@@ -319,7 +319,7 @@ style: format!("flex: 1; padding: 0.75rem; border: 1px solid {}; border-radius: 
                             style: if is_loading() || matches!(loading_state(), LoadingState::Loading) {
                                 "padding: 0.75rem 1.5rem; border: none; border-radius: 6px; background: #444; color: #fff; font-size: 1rem; cursor: not-allowed; opacity: 0.6;"
                             } else {
-                                "padding: 0.75rem 1.5rem; border: none; border-radius: 6px; background: #0d6efd; color: #fff; font-size: 1rem; cursor: pointer;"
+                                "padding: 0.75rem 1.5rem; border: none; border-radius: 6px; background: #3b82f6; color: #fff; font-size: 1rem; cursor: pointer;"
                             },
                             "Send"
                         }
