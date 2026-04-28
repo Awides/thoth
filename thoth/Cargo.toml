@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dioxus = { version = "0.7", features = ["desktop"] }
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["desktop", "native"] }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -21,3 +21,7 @@ bindgen = "0.69"
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+# Force specific image version for native renderer
+[dependencies.image]
+version = "=0.25.6"
