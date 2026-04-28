@@ -3,8 +3,12 @@ name = "Thoth"
 default_platform = "desktop"
 
 [web.app]
-title = "Thoth"
+title = ""
 
 [web.watcher]
 
 [web.build]
+
+[desktop.app]
+title = ""
+window_decorations = false
