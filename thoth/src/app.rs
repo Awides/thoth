@@ -12,7 +12,23 @@ struct Message { id: u64, role: MessageRole, content: String, thinking: String }
 #[derive(Clone, PartialEq, Debug)]
 enum LoadingState { Loading, Ready, Error(String) }
 
+#[derive(Clone, PartialEq, Debug)]
+enum Theme { Light, Dark }
+impl Theme {
+    fn toggle(&self) -> Self {
+        match self {
+            Theme::Light => Theme::Dark,
+            Theme::Dark => Theme::Light,
+        }
+    }
+    fn bg(&self) -> &'static str { match self { Theme::Light => "#ffffff", Theme::Dark => "#1e1e1e" } }
+    fn fg(&self) -> &'static str { match self { Theme::Light => "#1a1a1a", Theme::Dark => "#e0e0e0" } }
+    fn panel(&self) -> &'static str { match self { Theme::Light => "#f5f5f5", Theme::Dark => "#252526" } }
+    fn border(&self) -> &'static str { match self { Theme::Light => "#ddd", Theme::Dark => "#333" } }
+}
+
 pub fn App() -> Element {
+let mut theme = use_signal_sync(|| Theme::Dark);
     let mut messages = use_signal_sync(|| Vec::<Message>::new());
     let mut next_id = use_signal_sync(|| 0u64);
     let mut is_loading = use_signal_sync(|| false);
@@ -20,9 +36,8 @@ pub fn App() -> Element {
     let mut engine_ready = use_signal_sync(|| false);
 
     // Persistent shared engine command sender (initially None)
-    let engine_tx = use_signal(|| Arc::new(Mutex::new(None)));
-
-    // Config and model path
+let engine_tx = use_signal(|| Arc::new(Mutex::new(None)));
+let theme_c = theme.clone();
     let config = llama::Config {
         n_ctx: 512, n_gpu_layers: 99, n_threads: 8, n_batch: 512,
         use_mmap: true, temperature: 0.7, top_p: 0.9, top_k: 40,
@@ -79,21 +94,26 @@ pub fn App() -> Element {
         let mut is_loading = is_loading.clone();
         let mut loading_state = loading_state.clone();
         let engine_tx = (engine_tx)().clone();
-        let mut system_msg = system_msg.clone();
+let mut system_msg = system_msg.clone();
+let mut theme = theme_c.clone();
 
-        move |input_val: String| {
-            if input_val.is_empty() { return; }
+move |input_val: String| {
+if input_val.is_empty() { return; }
 
-            // Slash commands
-            if input_val.starts_with('/') {
-                let parts: Vec<&str> = input_val.split_whitespace().collect();
-                match parts.get(0).copied() {
-                    Some("/help") => {
-                        (system_msg.lock().unwrap())(format!(
-                            "Commands:\n/clear - clear chat\n/list - list models\n/load <path> - load model\n/unload - unload model\n/switch <path> - switch model"
-                        ));
-                    }
-                    Some("/clear") => { messages.with_mut(|v| v.clear()); }
+// Slash commands
+if input_val.starts_with('/') {
+let parts: Vec<&str> = input_val.split_whitespace().collect();
+match parts.get(0).copied() {
+Some("/help") => {
+(system_msg.lock().unwrap())(format!(
+"Commands:\n/clear - clear chat\n/list - list models\n/load <path> - load model\n/unload - unload model\n/switch <path> - switch model\n/light - light theme\n/dark - dark theme"
+));
+}
+Some("/clear") => { messages.with_mut(|v| v.clear()); }
+Some("/theme") | Some("/light") | Some("/dark") => {
+theme.set(theme().toggle());
+(system_msg.lock().unwrap())(format!("Theme: {:?}", theme()));
+}
                     Some("/list") => {
                         match fs::read_dir("models") {
                             Ok(entries) => {
@@ -253,31 +273,20 @@ match llama::infer_stream(&engine_tx_c, prompt) {
         }
     };
 
-    let msgs = messages();
-    rsx! {
-        div {
-            style: "display: flex; flex-direction: column; height: 100vh; background: #1e1e1e; color: #e0e0e0; font-family: system-ui, -apple-system, sans-serif;",
-            div {
-                style: "padding: 1rem; border-bottom: 1px solid #333; background: #252526;",
-                h1 { style: "margin: 0; font-size: 1.2rem; color: #fff;", "Thoth – Streaming Inference" },
-                p {
-                    style: "margin: 0.5rem 0 0; font-size: 0.85rem; color: #888;",
-                    match loading_state() {
-                        LoadingState::Loading => "Loading model…",
-                        LoadingState::Ready => "Inference engine ready",
-                        LoadingState::Error(ref e) => e,
-                    }
-                },
-            },
-            div {
-                style: "flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.75rem;",
+let current_theme = theme();
+let msgs = messages();
+rsx! {
+div {
+style: format!("display: flex; flex-direction: column; height: 100vh; background: {}; color: {}; font-family: system-ui, -apple-system, sans-serif;", current_theme.bg(), current_theme.fg()),
+div {
+style: "flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;",
                 for msg in msgs.iter() {
                     div {
                         key: "{msg.id}",
                         style: format!(
                             "padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; align-self: {}; background: {}; word-wrap: break-word;",
                             match msg.role { MessageRole::User => "flex-end", _ => "flex-start" },
-                            match msg.role { MessageRole::User => "#0d6efd", MessageRole::Assistant => "#2d2d2d", MessageRole::System => "#5c2d2d" }
+                            match msg.role { MessageRole::User => "#0d6efd", MessageRole::Assistant => current_theme.panel(), MessageRole::System => "#5c2d2d" }
                         ),
 if !msg.thinking.is_empty() {
                         pre { style: "margin: 0 0 0.25rem 0; white-space: pre-wrap; font-family: inherit; font-weight: 300; font-style: italic; opacity: 0.8;", "{msg.thinking}" }
@@ -287,23 +296,23 @@ if !msg.thinking.is_empty() {
                 },
                 
             },
-            div {
-                style: "padding: 1rem; border-top: 1px solid #333; background: #252526;",
-                form {
-                    onsubmit: on_submit,
-                    div { style: "display: flex; gap: 0.5rem;",
-                        input {
-                            r#type: "text",
-                            placeholder: match loading_state() {
-                                LoadingState::Loading => "Loading model…",
-                                _ => "Enter prompt or /command…",
-                            },
-                            disabled: matches!(loading_state(), LoadingState::Loading),
-                            value: "{input.read()}",
-                            oninput: move |e| { *input.write() = e.data.value(); },
-                            onkeydown: on_keydown,
-                            style: "flex: 1; padding: 0.75rem; border: 1px solid #444; border-radius: 6px; background: #1e1e1e; color: #e0e0e0; font-size: 1rem; outline: none;",
-                        },
+div {
+style: format!("padding: 0.75rem; border-top: 1px solid {}; background: {};", current_theme.border(), current_theme.panel()),
+form {
+onsubmit: on_submit,
+div { style: "display: flex; gap: 0.5rem;",
+input {
+r#type: "text",
+placeholder: match loading_state() {
+LoadingState::Loading => "Loading model…",
+_ => "Enter prompt or /command…",
+},
+disabled: matches!(loading_state(), LoadingState::Loading),
+value: "{input.read()}",
+oninput: move |e| { *input.write() = e.data.value(); },
+onkeydown: on_keydown,
+style: format!("flex: 1; padding: 0.75rem; border: 1px solid {}; border-radius: 6px; background: {}; color: {}; font-size: 1rem; outline: none;", current_theme.border(), current_theme.bg(), current_theme.fg()),
+},
                         button {
                             r#type: "submit",
                             disabled: is_loading() || matches!(loading_state(), LoadingState::Loading) || input.read().trim().is_empty(),
