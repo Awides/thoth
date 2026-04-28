@@ -279,7 +279,7 @@ rsx! {
 div {
 style: format!("display: flex; flex-direction: column; height: 100vh; background: {}; color: {}; font-family: system-ui, -apple-system, sans-serif;", current_theme.bg(), current_theme.fg()),
 div {
-style: "flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;",
+style: "flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; padding: 1rem;",
                 for msg in msgs.iter() {
                     div {
                         key: "{msg.id}",
