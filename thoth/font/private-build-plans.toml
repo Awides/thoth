@@ -1,0 +1,178 @@
+[buildPlans.SystemSans]
+family = "SystemSans"
+spacing = "normal"
+serifs = "sans"
+noCvSs = true
+exportGlyphNames = false
+
+[buildPlans.SystemSans.weights.Regular]
+shape = 400
+menu = 400
+css = 400
+
+[buildPlans.SystemSans.weights.Thin]
+shape = 100
+menu = 100
+css = 100
+
+[buildPlans.SystemSans.weights.ExtraLight]
+shape = 200
+menu = 200
+css = 200
+
+[buildPlans.SystemSans.weights.Heavy]
+shape = 900
+menu = 900
+css = 900
+
+[buildPlans.SystemSans.widths.Normal]
+shape = 500
+menu = 5
+css = "normal"
+
+[buildPlans.SystemSans.slopes.Upright]
+angle = 0
+shape = "upright"
+menu = "upright"
+css = "normal"
+
+[buildPlans.SystemSans.slopes.Oblique]
+angle = 9.4
+shape = "oblique"
+menu = "oblique"
+css = "oblique"
+
+
+[buildPlans.SystemSlab]
+family = "SystemSlab"
+spacing = "normal"
+serifs = "slab"
+noCvSs = true
+exportGlyphNames = false
+
+[buildPlans.SystemSlab.weights.Regular]
+shape = 400
+menu = 400
+css = 400
+
+[buildPlans.SystemSlab.weights.Thin]
+shape = 100
+menu = 100
+css = 100
+
+[buildPlans.SystemSlab.weights.ExtraLight]
+shape = 200
+menu = 200
+css = 200
+
+[buildPlans.SystemSlab.weights.Heavy]
+shape = 900
+menu = 900
+css = 900
+
+[buildPlans.SystemSlab.widths.Normal]
+shape = 500
+menu = 5
+css = "normal"
+
+[buildPlans.SystemSlab.slopes.Upright]
+angle = 0
+shape = "upright"
+menu = "upright"
+css = "normal"
+
+[buildPlans.SystemSlab.slopes.Oblique]
+angle = 9.4
+shape = "oblique"
+menu = "oblique"
+css = "oblique"
+
+[buildPlans.MsgSlab]
+family = "MsgSlab"
+spacing = "quasi-proportional"
+serifs = "slab"
+noCvSs = true
+exportGlyphNames = false
+
+[buildPlans.MsgSlab.weights.Regular]
+shape = 400
+menu = 400
+css = 400
+
+[buildPlans.MsgSlab.weights.Thin]
+shape = 100
+menu = 100
+css = 100
+
+[buildPlans.MsgSlab.weights.ExtraLight]
+shape = 200
+menu = 200
+css = 200
+
+[buildPlans.MsgSlab.weights.Heavy]
+shape = 900
+menu = 900
+css = 900
+
+[buildPlans.MsgSlab.widths.Normal]
+shape = 500
+menu = 5
+css = "normal"
+
+[buildPlans.MsgSlab.slopes.Upright]
+angle = 0
+shape = "upright"
+menu = "upright"
+css = "normal"
+
+[buildPlans.MsgSlab.slopes.Oblique]
+angle = 9.4
+shape = "oblique"
+menu = "oblique"
+css = "oblique"
+
+[buildPlans.MsgSans]
+family = "MsgSans"
+spacing = "quasi-proportional"
+serifs = "sans"
+noCvSs = true
+exportGlyphNames = false
+
+[buildPlans.MsgSans.weights.Regular]
+shape = 400
+menu = 400
+css = 400
+
+[buildPlans.MsgSans.weights.Thin]
+shape = 100
+menu = 100
+css = 100
+
+[buildPlans.MsgSans.weights.ExtraLight]
+shape = 200
+menu = 200
+css = 200
+
+[buildPlans.MsgSans.weights.Heavy]
+shape = 900
+menu = 900
+css = 900
+
+[buildPlans.MsgSans.widths.Normal]
+shape = 500
+menu = 5
+css = "normal"
+
+[buildPlans.MsgSans.slopes.Upright]
+angle = 0
+shape = "upright"
+menu = "upright"
+css = "normal"
+
+[buildPlans.MsgSans.slopes.Oblique]
+angle = 9.4
+shape = "oblique"
+menu = "oblique"
+css = "oblique"
+
+
