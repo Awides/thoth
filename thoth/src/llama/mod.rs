@@ -8,6 +8,24 @@ use self::bindings::*;
 use std::ffi::CString;
 use std::path::Path;
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+static LOG_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+pub fn suppress_llama_logging() {
+    if LOG_SUPPRESSED.swap(true, Ordering::SeqCst) { return; }
+    unsafe {
+        llama_log_set(Some(silent_log_callback), std::ptr::null_mut());
+    }
+}
+
+unsafe extern "C" fn silent_log_callback(
+    _level: ggml_log_level,
+    _text: *const std::os::raw::c_char,
+    _user_data: *mut std::os::raw::c_void,
+) {
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -52,6 +70,7 @@ impl Engine {
     pub fn load<P: AsRef<Path>>(path: P, config: Config) -> Result<Self> {
         let path = path.as_ref();
         let path_cstr = CString::new(path.to_string_lossy().as_bytes())?;
+        suppress_llama_logging();
         unsafe { llama_backend_init() }
         let mut params = unsafe { llama_model_default_params() };
         params.n_gpu_layers = config.n_gpu_layers as i32;
