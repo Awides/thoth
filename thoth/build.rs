@@ -1,5 +1,9 @@
 fn main() {
-    // Generate bindings using bindgen
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if target.contains("wasm32") {
+        return;
+    }
+
     let bindings = bindgen::Builder::default()
         .header("/tmp/llama.cpp-build/include/llama.h")
         .clang_arg("-I/tmp/llama.cpp-build/ggml/include")
@@ -8,13 +12,12 @@ fn main() {
         .clang_arg("/usr/lib/gcc/x86_64-linux-gnu/15/include")
         .generate()
         .expect("Unable to generate bindings");
-    
+
     let out_path = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("bindings.rs");
     bindings
         .write_to_file(&out_path)
         .expect("Couldn't write bindings");
-    
-    // Link to llama.cpp
+
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let lib_path = std::path::Path::new(&manifest_dir).join("lib");
     if lib_path.exists() {

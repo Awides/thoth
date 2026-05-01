@@ -197,28 +197,36 @@ Default values are defined in `Config::default()`.
 ### Architecture for Web
 - Replace llama.cpp FFI with a Web Worker that loads the GGUF model via llama.cpp compiled to WASM.
 - `spawn_inference_thread()` needs a platform-specific implementation:
-  - **Desktop (current)**: Uses `std::thread` + llama.cpp FFI
-  - **Web (planned)**: Uses Web Worker + postMessage IPC
-- `engine.rs` abstraction layer: swap implementation based on `#[cfg(target_arch = "wasm32")]`.
+  - **Desktop (current)**: Uses `std::thread` + llama.cpp FFI via `llama_native/`
+  - **Web (current stub)**: Uses placeholder that echoes prompt back; needs Web Worker IPC
+- Platform dispatch via `main.rs`: `#[path = "llama_native/mod.rs"]` for desktop, separate `web_app` module for web.
+- `build.rs` skips bindgen/linking for wasm target.
 
-### Key Changes for WASM
-1. Compile llama.cpp to WASM with Emscripten.
-2. Create Web Worker JS that loads `llama.wasm` and handles inference commands.
-3. On Rust side, implement a WASM-compatible `spawn_inference_thread()` that spawns a Web Worker.
-4. Replace `std::sync::mpsc` and `tokio::sync::oneshot` with `wasm-bindgen` channel equivalents.
-5. Keep the same `StreamEvent` interface so `app.rs` needs minimal changes.
+### Current State
+- **Desktop**: Fully working - llama.cpp native, Tailwind CSS, autoscroll, theme toggle
+- **Web**: Compiles to `wasm32-unknown-unknown`, renders placeholder page
+- **Next**: Create a Web Worker that loads `llama.wasm` and communicates via `postMessage`. The Rust web backend (`llama_web/`) would use `wasm-bindgen` to spawn the worker and bridge events.
+
+### Key Changes for WASM (remaining)
+1. Compile llama.cpp to WASM with Emscripten (produces `llama.wasm` and worker JS glue).
+2. Create a Web Worker JS (`public/worker.js`) that imports the Emscripten module and handles commands.
+3. Implement `spawn_inference_thread()` equivalent using Web Worker API via `wasm-bindgen`.
+4. Bridge `StreamEvent` between worker `postMessage` and Rust `mpsc` channels.
+5. Add the same `app.rs` UI on web (reuse or platform-gate llama imports).
 
 ### Implementation Plan
-1. Add `#[cfg(target_arch = "wasm32")]` to `main.rs` for web entry point.
-2. Create `src/llama_web.rs` with Web Worker-based inference backend.
-3. In `src/llama/mod.rs`, conditionally include desktop (`mod llama_native`) or web (`mod llama_web`) backend.
-4. Ensure `Dioxus.toml` has web platform config.
+1. Compile PrismML/llama.cpp to WASM with Emscripten (`emcmake cmake .. -DLLAMA_CUDA=off`)
+2. Create `public/worker.js` that loads the wasm and processes inference commands
+3. Replace `src/llama_web/` stub with real worker IPC
+4. Wire up Dioxus web app to use the web backend
+5. Test with `dx serve --platform web`
 
 ---
 
 ## Code Patterns for Agents
 
-- **Add features** to `src/llama/mod.rs`. Keep FFI `unsafe` confined to `Engine`.
+- **Desktop llama**: Modify `src/llama_native/mod.rs`. Keep FFI `unsafe` confined to `Engine`.
+- **Web llama**: Modify `src/llama_web/mod.rs`. Uses `wasm-bindgen` to talk to Web Worker.
 - **Extend Config** if you need more llama.cpp parameters.
 - **Async/Streaming**: Use `tokio::sync::mpsc::UnboundedChannel` for token streaming between threads.
 - **State management**: Use `use_signal_sync` for cross-render persistence, `use_signal` for local state.

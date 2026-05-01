@@ -3,11 +3,15 @@ name = "Thoth"
 default_platform = "desktop"
 
 [web.app]
-title = ""
+title = "Thoth"
 
 [web.watcher]
 
 [web.build]
+public_dir = "public"
+
+[web.resources]
+style = ["assets/tailwind.css"]
 
 [desktop.app]
 title = ""

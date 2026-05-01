@@ -4,24 +4,34 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["desktop"] }
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main" }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["sync", "macros", "time"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["desktop"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
 hf-hub = "0.3"
 directories = "5"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+image = "=0.25.6"
 
-[build-dependencies]
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["web"] }
+tokio = { version = "1", features = ["sync", "macros", "time", "rt"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Worker", "MessageEvent", "console"] }
+wasm-bindgen-futures = "0.4"
+getrandom = { version = "0.2", features = ["js"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.build-dependencies]
 bindgen = "0.69"
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
-
-# Force specific image version for native renderer
-[dependencies.image]
-version = "=0.25.6"
