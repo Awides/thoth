@@ -42,7 +42,7 @@ pub fn App() -> Element {
     let handle = use_signal_sync(|| llama::spawn_inference_thread());
 
     // Load model at startup
-    let model_path = "/home/awides/dev/bn/thoth/models/Bonsai-1.7B-Q1_0.gguf".to_string();
+    let model_path = "/home/awides/dev/bn/models/Bonsai-1.7B-Q1_0.gguf".to_string();
     let config = llama::Config {
         n_ctx: 512, n_gpu_layers: 99, n_threads: 8, n_batch: 512,
         use_mmap: true, temperature: 0.7, top_p: 0.9, top_k: 40,
