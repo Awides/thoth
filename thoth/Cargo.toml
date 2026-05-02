@@ -10,7 +10,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["sync", "macros", "time"] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["desktop"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
 hf-hub = "0.3"
@@ -18,6 +18,29 @@ directories = "5"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 image = "=0.25.6"
+
+# Android ARM64 - full inference with llama.cpp
+[target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["mobile"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+hf-hub = { version = "0.3", default-features = false, features = ["tokio"] }
+directories = "5"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+image = { version = "=0.25.6", default-features = false }
+android-activity = { version = "0.6", features = ["native-activity"] }
+openssl = { version = "0.10", features = ["vendored"] }
+
+# Android ARMv7 - UI only, no local inference
+[target.'cfg(all(target_os = "android", target_arch = "arm"))'.dependencies]
+dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["mobile"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+directories = "5"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+image = { version = "=0.25.6", default-features = false }
+android-activity = { version = "0.6", features = ["native-activity"] }
+openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 dioxus = { git = "https://github.com/DioxusLabs/dioxus", branch = "main", features = ["web"] }

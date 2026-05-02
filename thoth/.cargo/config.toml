@@ -1,0 +1,11 @@
+# Android ARM64 (full inference)
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android21-clang"
+rustflags = ["-C", "link-arg=-Wl,--allow-shlib-undefined"]
+
+# Android ARMv7 (no local inference - UI only)
+[target.armv7-linux-androideabi]
+linker = "armv7a-linux-androideabi21-clang"
+
+# Add Rust target
+# rustup target add armv7-linux-androideabi
