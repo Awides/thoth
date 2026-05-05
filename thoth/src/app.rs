@@ -16,11 +16,20 @@ const MARKDOWN_CSS: &str = r#"
 pub enum MessageRole { User, Assistant, System }
 
 #[derive(Clone, PartialEq)]
+enum MessageKind {
+    /// Regular text — rendered as markdown
+    Text,
+    /// Typed, tagged request for structured user input
+    Request { request_type: String, tag: String },
+}
+
+#[derive(Clone, PartialEq)]
 struct Message {
     id: u64,
     role: MessageRole,
     content: String,
     thinking: String,
+    kind: MessageKind,
 }
 
 #[component]
@@ -65,10 +74,12 @@ pub fn App() -> Element {
         use_mmap: true, temperature: 0.7, top_p: 0.9, top_k: 40,
     };
 
-    let handle_c = handle.clone();
-    let ls_load = loading_state.clone();
-    let il_load = is_loading.clone();
-    let _fut = use_future(move || {
+let handle_c = handle.clone();
+let ls_load = loading_state.clone();
+let il_load = is_loading.clone();
+let msgs = messages.clone();
+let nid = next_id.clone();
+let _fut = use_future(move || {
         let h = handle_c.read().clone();
         let mut ls = ls_load.clone();
         let mut il = il_load.clone();
@@ -81,7 +92,72 @@ pub fn App() -> Element {
             match llama::load_model(&h, p, c).await {
                 Ok(_) => {
                     eprintln!("DEBUG: model loaded successfully");
-                    ls.set(LoadingState::Ready);
+ls.set(LoadingState::Ready);
+                    // Show welcome on first launch
+                    let msgs_w = msgs.clone();
+                    let nid_w = nid.clone();
+                    let need_onboard = crate::system::config::needs_onboarding();
+                    tokio::spawn(async move {
+                        let mut ms = msgs_w;
+                        let mut n = nid_w;
+                        if need_onboard {
+                            let prompts: Vec<(&str, u64)> = vec![
+                                ("👋 Welcome to Thoth!", 600),
+                                ("I'm your decentralized AI assistant.", 600),
+                                ("Let's get you set up…", 400),
+                            ];
+                            for (text, delay) in &prompts {
+                                let id = n();
+                                n.set(id + 1);
+                                ms.with_mut(|v| {
+                                    v.push(Message {
+                                        id,
+                                        role: MessageRole::System,
+                                        content: String::new(),
+                                        thinking: String::new(),
+                                        kind: MessageKind::Text,
+                                    });
+                                });
+                                for ch in text.chars() {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+                                    ms.with_mut(|v| {
+                                        if let Some(msg) = v.iter_mut().find(|m| m.id == id) {
+                                            msg.content.push(ch);
+                                        }
+                                    });
+                                }
+                                tokio::time::sleep(tokio::time::Duration::from_millis(*delay)).await;
+                            }
+                            // Final prompt + request
+                            let pid = n();
+                            n.set(pid + 1);
+                            ms.with_mut(|v| {
+                                v.push(Message {
+                                    id: pid,
+                                    role: MessageRole::System,
+                                    content: "## How would you like to proceed?".to_string(),
+                                    thinking: String::new(),
+                                    kind: MessageKind::Text,
+                                });
+                            });
+                            // Small delay, then add the Request
+                            tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+                            let rid = n();
+                            n.set(rid + 1);
+                            ms.with_mut(|v| {
+                                v.push(Message {
+                                    id: rid,
+                                    role: MessageRole::System,
+                                    content: String::new(),
+                                    thinking: String::new(),
+                                    kind: MessageKind::Request {
+                                        request_type: "new_or_sync".to_string(),
+                                        tag: "onboard-start".to_string(),
+                                    },
+                                });
+                            });
+                        }
+                    });
                 }
                 Err(e) => {
                     eprintln!("DEBUG: model load error: {}", e);
@@ -111,7 +187,7 @@ pub fn App() -> Element {
             let id = nid();
             nid.set(id + 1);
             msgs.with_mut(|v| {
-                v.push(Message { id, role: MessageRole::User, content: trimmed.clone(), thinking: String::new() })
+                v.push(Message { id, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text })
             });
 
             if trimmed.starts_with("/theme") {
@@ -131,7 +207,7 @@ pub fn App() -> Element {
             let aid = nid();
             nid.set(aid + 1);
             msgs.with_mut(|v| {
-                v.push(Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new() })
+                v.push(Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text })
             });
 
             let ms = msgs.clone();
@@ -206,22 +282,39 @@ div {
             div {
                 class: "flex-1 overflow-y-auto p-6 pt-8 space-y-3 min-h-0 scroll-smooth flex flex-col-reverse w-full max-w-[896px] mx-auto",
                 for msg in msgs.iter().rev() {
-                    div {
-                        key: "{msg.id}",
-                        class: format!("p-3 rounded-lg max-w-[80%] break-words {}", 
-                            match msg.role { MessageRole::User => "self-end", _ => "self-start" }
-                        ),
-                        style: format!("background: {}", match msg.role {
-                            MessageRole::User => "#3b82f6",
-                            MessageRole::Assistant => current_theme.panel(),
-                            MessageRole::System => "#5c2d2d",
-                        }),
-                        if !msg.thinking.is_empty() {
-                            pre { class: "text-sm italic opacity-80 mb-1 whitespace-pre-wrap font-inherit font-light", "{msg.thinking}" }
-                        }
-                        pre { class: "m-0 whitespace-pre-wrap font-inherit", "{msg.content}" }
-                    }
-                }
+div {
+    key: "{msg.id}",
+    class: match msg.kind {
+        MessageKind::Request { .. } => "p-3 w-full self-start".to_string(),
+        _ => format!("p-3 rounded-lg max-w-[80%] break-words {}",
+            match msg.role { MessageRole::User => "self-end", _ => "self-start" }
+        ),
+    },
+    style: match &msg.kind {
+        MessageKind::Request { .. } => "".to_string(),
+        _ => format!("background: {}", match msg.role {
+            MessageRole::User => "#3b82f6",
+            MessageRole::Assistant => current_theme.panel(),
+            MessageRole::System => "transparent",
+        }),
+    },
+    if !msg.thinking.is_empty() {
+        pre { class: "text-sm italic opacity-80 mb-1 whitespace-pre-wrap font-inherit font-light", "{msg.thinking}" }
+    }
+    if let MessageKind::Request { request_type, tag } = &msg.kind {
+        div { class: "border rounded-lg p-4",
+            style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
+            p { class: "text-xs opacity-50 mb-1", "{tag}" },
+            p { class: "text-sm", "{request_type}" },
+        }
+    } else {
+        if msg.role == MessageRole::System {
+            Markdown { content: msg.content.clone() }
+        } else {
+            pre { class: "m-0 whitespace-pre-wrap font-inherit", "{msg.content}" }
+        }
+    }
+}
                 div {
                     class: "h-px w-full",
                     onmounted: move |event| {
@@ -266,4 +359,5 @@ div {
             }
         }
     }
+}
 }
