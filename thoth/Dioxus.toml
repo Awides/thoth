@@ -16,3 +16,5 @@ style = ["assets/tailwind.css"]
 [desktop.app]
 title = ""
 window_decorations = false
+window_width = 1024
+window_height = 768

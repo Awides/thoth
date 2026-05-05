@@ -16,6 +16,18 @@ pub mod llama;
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 pub mod engine;
 
+// Key storage (encrypted credentials)
+pub mod key_storage;
+
+// Memvid persistence layer
+pub mod mem;
+
+// Network runtime (Nostr, MLS, Rhai) - all platforms
+pub mod net;
+
+// System dialog and onboarding - all platforms
+pub mod system;
+
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 mod app;
 
