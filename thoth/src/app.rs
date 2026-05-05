@@ -176,99 +176,101 @@ ls.set(LoadingState::Ready);
         let il = is_loading.clone();
         let t = theme.clone();
 
-        move |input: String| {
-            let mut msgs = msgs;
-            let mut nid = nid;
-            let mut il = il;
-            let mut t = t;
-            let handle = handle;
-            let trimmed = input.trim().to_string();
+move |input: String| {
+let mut msgs = msgs;
+let mut nid = nid;
+let mut il = il;
+let mut t = t;
+let handle = handle;
+let trimmed = input.trim().to_string();
 
-            let id = nid();
-            nid.set(id + 1);
-            msgs.with_mut(|v| {
-                v.push(Message { id, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text })
-            });
+// Handle slash commands locally — don't send to assistant
+if trimmed.starts_with("/theme") {
+    t.set(t().toggle());
+    return;
+}
+if trimmed.starts_with("/light") {
+    t.set(Theme::Light);
+    return;
+}
+if trimmed.starts_with("/dark") {
+    t.set(Theme::Dark);
+    return;
+}
 
-            if trimmed.starts_with("/theme") {
-                t.set(t().toggle());
-                return;
-            }
-            if trimmed.starts_with("/light") {
-                t.set(Theme::Light);
-                return;
-            }
-            if trimmed.starts_with("/dark") {
-                t.set(Theme::Dark);
-                return;
-            }
+let id = nid();
+nid.set(id + 1);
+msgs.with_mut(|v| {
+    v.push(Message { id, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text })
+});
 
-            il.set(true);
-            let aid = nid();
-            nid.set(aid + 1);
-            msgs.with_mut(|v| {
-                v.push(Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text })
-            });
+il.set(true);
+let aid = nid();
+nid.set(aid + 1);
+msgs.with_mut(|v| {
+    v.push(Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text })
+});
 
-            let ms = msgs.clone();
-            let il2 = il.clone();
-            let h2 = handle.read().clone();
-            let prompt = format!(
-                "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-                trimmed
-            );
+let ms = msgs.clone();
+let il2 = il.clone();
+let h2 = handle.read().clone();
+let prompt = format!(
+    "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+    trimmed
+);
 
-            tokio::spawn(async move {
-                let mut ms = ms;
-                let mut il2 = il2;
-                eprintln!("DEBUG: starting infer_stream...");
-                match llama::infer_stream(&h2, prompt) {
-                    Ok((mut rx, _)) => {
-                        let mut in_thinking = false;
-                        while let Some(event) = rx.recv().await {
-                            match event {
-                                llama::StreamEvent::ThinkingStart => { in_thinking = true; }
-                                llama::StreamEvent::ThinkingEnd => { in_thinking = false; }
-                                llama::StreamEvent::Token(token) => {
-                                    ms.with_mut(|v| {
-                                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                                            if in_thinking { msg.thinking.push_str(&token); }
-                                            else { msg.content.push_str(&token); }
-                                        }
-                                    });
-                                }
-                                llama::StreamEvent::Done(_) => {}
-                                llama::StreamEvent::Error(e) => {
-                                    ms.with_mut(|v| {
-                                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                                            msg.content = format!("Error: {}", e);
-                                        }
-                                    });
-                                    break;
-                                }
+tokio::spawn(async move {
+    let mut ms = ms;
+    let mut il2 = il2;
+    eprintln!("DEBUG: starting infer_stream...");
+    match llama::infer_stream(&h2, prompt) {
+        Ok((mut rx, _)) => {
+            let mut in_thinking = false;
+            while let Some(event) = rx.recv().await {
+                match event {
+                    llama::StreamEvent::ThinkingStart => { in_thinking = true; }
+                    llama::StreamEvent::ThinkingEnd => { in_thinking = false; }
+                    llama::StreamEvent::Token(token) => {
+                        ms.with_mut(|v| {
+                            if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                if in_thinking { msg.thinking.push_str(&token); }
+                                else { msg.content.push_str(&token); }
                             }
-                        }
+                        });
                     }
-                    Err(e) => {
+                    llama::StreamEvent::Done(_) => {}
+                    llama::StreamEvent::Error(e) => {
                         ms.with_mut(|v| {
                             if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
                                 msg.content = format!("Error: {}", e);
                             }
                         });
+                        break;
                     }
                 }
-                il2.set(false);
+            }
+        }
+        Err(e) => {
+            ms.with_mut(|v| {
+                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                    msg.content = format!("Error: {}", e);
+                }
             });
         }
+    }
+    il2.set(false);
+});
+}
     };
 
-    let on_submit = move |e: FormEvent| {
-        e.prevent_default();
-        let val = input.read().trim().to_string();
-        if !val.is_empty() && !is_loading() && !matches!(loading_state(), LoadingState::Loading) {
-            process_input(val);
-        }
-    };
+let on_submit = move |e: FormEvent| {
+e.prevent_default();
+let val = input.read().trim().to_string();
+if !val.is_empty() && !is_loading() && !matches!(loading_state(), LoadingState::Loading) {
+    *input.write() = String::new();
+    process_input(val);
+}
+};
 
     let current_theme = theme();
     let msgs = messages();
