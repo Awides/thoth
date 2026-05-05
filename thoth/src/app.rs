@@ -346,8 +346,8 @@ div { class: "border rounded-lg p-4 max-w-[80%]",
                     },
                 }
             }
-            div {
-                class: "p-3 border-t",
+div {
+    class: "shrink-0 p-3 border-t",
                 style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
                 form {
                     onsubmit: on_submit,
