@@ -128,20 +128,29 @@ ls.set(LoadingState::Ready);
                                 }
                                 tokio::time::sleep(tokio::time::Duration::from_millis(*delay)).await;
                             }
-                            // Final prompt + request
-                            let pid = n();
-                            n.set(pid + 1);
-                            ms.with_mut(|v| {
-                                v.push(Message {
-                                    id: pid,
-                                    role: MessageRole::System,
-                                    content: "## How would you like to proceed?".to_string(),
-                                    thinking: String::new(),
-                                    kind: MessageKind::Text,
-                                });
-                            });
-                            // Small delay, then add the Request
-                            tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+// Final prompt + request (typed)
+let pid = n();
+n.set(pid + 1);
+let prompt_text = "# How would you like to proceed?";
+ms.with_mut(|v| {
+    v.push(Message {
+        id: pid,
+        role: MessageRole::System,
+        content: String::new(),
+        thinking: String::new(),
+        kind: MessageKind::Text,
+    });
+});
+for ch in prompt_text.chars() {
+    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+    ms.with_mut(|v| {
+        if let Some(msg) = v.iter_mut().find(|m| m.id == pid) {
+            msg.content.push(ch);
+        }
+    });
+}
+// Small delay, then add the Request
+tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
                             let rid = n();
                             n.set(rid + 1);
                             ms.with_mut(|v| {
@@ -150,10 +159,10 @@ ls.set(LoadingState::Ready);
                                     role: MessageRole::System,
                                     content: String::new(),
                                     thinking: String::new(),
-                                    kind: MessageKind::Request {
-                                        request_type: "new_or_sync".to_string(),
-                                        tag: "onboard-start".to_string(),
-                                    },
+kind: MessageKind::Request {
+    request_type: "choice".to_string(),
+    tag: "onboard-start".to_string(),
+},
                                 });
                             });
                         }
@@ -266,7 +275,17 @@ tokio::spawn(async move {
 let on_submit = move |e: FormEvent| {
 e.prevent_default();
 let val = input.read().trim().to_string();
-if !val.is_empty() && !is_loading() && !matches!(loading_state(), LoadingState::Loading) {
+if val.is_empty() {
+    return;
+}
+// Allow slash commands even while model is loading
+if val.starts_with('/') {
+    *input.write() = String::new();
+    process_input(val);
+    return;
+}
+// Real prompts need the model ready
+if *loading_state.read() == LoadingState::Ready {
     *input.write() = String::new();
     process_input(val);
 }
@@ -282,8 +301,8 @@ div {
             class: "h-screen flex flex-col",
             style: format!("background: {}; color: {}", current_theme.bg(), current_theme.fg()),
             div {
-                class: "flex-1 overflow-y-auto p-6 pt-8 space-y-3 min-h-0 scroll-smooth flex flex-col-reverse w-full max-w-[896px] mx-auto",
-                for msg in msgs.iter().rev() {
+                class: "flex-1 overflow-y-auto p-6 pt-8 space-y-3 min-h-0 scroll-smooth flex flex-col w-full max-w-[896px] mx-auto",
+                for msg in msgs.iter() {
 div {
     key: "{msg.id}",
     class: match msg.kind {
@@ -304,11 +323,11 @@ div {
         pre { class: "text-sm italic opacity-80 mb-1 whitespace-pre-wrap font-inherit font-light", "{msg.thinking}" }
     }
     if let MessageKind::Request { request_type, tag } = &msg.kind {
-        div { class: "border rounded-lg p-4",
-            style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
-            p { class: "text-xs opacity-50 mb-1", "{tag}" },
-            p { class: "text-sm", "{request_type}" },
-        }
+div { class: "border rounded-lg p-4 max-w-[80%]",
+    style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
+    p { class: "text-xs opacity-50 mb-1", "#{tag}" },
+    p { class: "text-sm", "[{request_type}]" },
+}
     } else {
         if msg.role == MessageRole::System {
             Markdown { content: msg.content.clone() }
