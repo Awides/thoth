@@ -298,10 +298,12 @@ rsx! {
 document::Stylesheet { href: TAILWIND }
 style { "{MARKDOWN_CSS}" }
 div {
-            class: "h-screen flex flex-col",
-            style: format!("background: {}; color: {}", current_theme.bg(), current_theme.fg()),
-            div {
-                class: "flex-1 overflow-y-auto p-6 pt-8 space-y-3 min-h-0 scroll-smooth flex flex-col w-full max-w-[896px] mx-auto",
+    style: format!("background: {}; color: {}; display: flex; flex-direction: column; height: 100vh;", current_theme.bg(), current_theme.fg()),
+    class: "h-screen flex flex-col",
+    // Message list area
+    div {
+        style: "flex: 1 1 0%; overflow-y: auto; min-height: 0;",
+        class: "p-6 pt-8 space-y-3 scroll-smooth w-full max-w-[896px] mx-auto",
                 for msg in msgs.iter() {
 div {
     key: "{msg.id}",
