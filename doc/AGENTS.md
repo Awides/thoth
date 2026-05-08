@@ -58,18 +58,33 @@ cmake --build . -j$(nproc)
 # 3. Install to a prefix (headers to install/include/, libs to install/lib/)
 cmake --install install
 
-# 4. Stage headers where build.rs expects them
-sudo mkdir -p /tmp/llama.cpp-build/include
-sudo cp -r install/include/* /tmp/llama.cpp-build/include/
-sudo cp -r ../ggml/include /tmp/llama.cpp-build/ggml/include/
+# 4. Prepare include tree that build.rs expects:
+#    A directory containing:
+#      include/llama.h
+#      ggml/include/
+#    You can either copy as before, or just set LLAMA_HOME to the install prefix
+#    and rely on the build script to locate the headers.
+#
+#    Option A (staging): Create $LLAMA_HOME as a unified tree:
+export LLAMA_HOME=$HOME/.llama.cpp
+mkdir -p $LLAMA_HOME/include
+cp -r install/include/* $LLAMA_HOME/include/
+cp -r ../ggml/include $LLAMA_HOME/ggml/include/
+#
+#    Option B (symlinks): Point LLAMA_HOME to install and ensure ggml is sibling:
+#      LLAMA_HOME=$HOME/src/llama.cpp/build/install
+#      And have a symlink $LLAMA_HOME/../ggml/include pointing to ../ggml/include
+#      (The build script expects $LLAMA_HOME/ggml/include to exist)
 
-# 5. Copy shared libraries into the project
-cp install/lib/libllama.so* install/lib/libggml*.so install/lib/libllama-common.so /home/awides/dev/bn/thoth/lib/
+# 5. Copy shared libraries into the project's lib/ directory:
+cp install/lib/libllama.so* install/lib/libggml*.so install/lib/libllama-common.so /home/awides/dev/thoth/lib/
+#    For Android, additionally copy to lib/android/arm64-v8a/ (see below).
 ```
 
 **Notes**:
-- The build.rs hardcodes `/tmp/llama.cpp-build/include/llama.h` and `/tmp/llama.cpp-build/ggml/include`. Adjust if you prefer different paths.
-- You need `libclang` installed for `bindgen` (`apt install libclang-dev` on Ubuntu/Debian).
+- The build script uses `LLAMA_HOME` (or `LLAMA_CPP_BUILD`) environment variable to locate headers. If unset, it defaults to `/tmp/llama.cpp-build` for backward compatibility.
+- For **Android**: you need a separate set of `.so` files for `arm64-v8a` placed in `lib/android/arm64-v8a/`. These should be built with the NDK toolchain. The Android build uses pre-generated Rust bindings (`src/llama/bindings.rs`); `bindgen` is only used for desktop builds.
+- You need `libclang` installed for `bindgen` on desktop (`apt install libclang-dev` on Ubuntu/Debian).
 
 ---
 
@@ -181,7 +196,7 @@ Default values are defined in `Config::default()`.
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
-| `bindgen` error | Missing headers in `/tmp/llama.cpp-build/` | Re-run setup steps 3-4 |
+| `bindgen` error | Missing headers (set `LLAMA_HOME`) | Ensure `LLAMA_HOME` points to directory containing `include/llama.h` and `ggml/include/` |
 | crash on inference | Header/lib version mismatch | Rebuild PrismML/llama.cpp and copy both headers and libs from that build |
 | `libllama.so.0: cannot open shared object file` | `LD_LIBRARY_PATH` not set | `export LD_LIBRARY_PATH=$PWD/lib` |
 | Model not found | Wrong path in `app.rs` or selected file doesn't exist | Edit `model_path` in `app.rs` or use file picker |

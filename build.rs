@@ -1,55 +1,84 @@
 fn main() {
-let target = std::env::var("TARGET").unwrap_or_default();
-let is_android = target.contains("android");
-let is_armv7 = target.contains("armv7");
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let is_android = target.contains("android");
+    let is_armv7 = target.contains("armv7");
+    let is_wasm = target.contains("wasm32");
 
-// ARMv7 Android doesn't use llama.cpp (no native inference)
-// WASM and ARMv7 skip bindgen
-if target.contains("wasm32") || is_armv7 {
-// For ARMv7, still set up basic linking but no llama
-if is_armv7 {
-let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-let lib_path = std::path::Path::new(&manifest_dir).join("lib");
-if lib_path.exists() {
-println!("cargo:rustc-link-search=native={}", lib_path.display());
-}
-println!("cargo:rustc-link-lib=log");
-}
-return;
-}
+    // WASM and ARMv7 skip bindgen and llama linking
+    if is_wasm || is_armv7 {
+        // For ARMv7, still set up basic linking but no llama
+        if is_armv7 {
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+            let lib_path = std::path::Path::new(&manifest_dir).join("lib");
+            if lib_path.exists() {
+                println!("cargo:rustc-link-search=native={}", lib_path.display());
+            }
+            println!("cargo:rustc-link-lib=log");
+        }
+        return;
+    }
+            println!("cargo:rustc-link-lib=log");
+        }
+        return;
+    }
 
-    let bindings = bindgen::Builder::default()
-        .header("/tmp/llama.cpp-build/include/llama.h")
-        .clang_arg("-I/tmp/llama.cpp-build/ggml/include")
-        .clang_arg("-I/tmp/llama.cpp-build/include")
-        .clang_arg("-isystem")
-        .clang_arg("/usr/lib/gcc/x86_64-linux-gnu/15/include")
-        .generate()
-        .expect("Unable to generate bindings");
+    // Determine llama.cpp install prefix.
+    // Use LLAMA_HOME if set, else default to /tmp/llama.cpp-build.
+    // The directory should contain:
+    //   include/llama.h
+    //   ggml/include/
+    //   lib/ (or lib/android/arm64-v8a/ for Android)
+    let llama_home = std::env::var("LLAMA_HOME")
+        .or_else(|_| std::env::var("LLAMA_CPP_BUILD"))
+        .unwrap_or_else(|_| "/tmp/llama.cpp-build".to_string());
 
-    let out_path = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("bindings.rs");
-    bindings
-        .write_to_file(&out_path)
-        .expect("Couldn't write bindings");
+    let header_path = std::path::Path::new(&llama_home).join("include/llama.h");
+    let ggml_include = std::path::Path::new(&llama_home).join("ggml/include");
 
-let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-let lib_path = std::path::Path::new(&manifest_dir).join("lib");
+    if !header_path.exists() {
+        eprintln!("\nERROR: llama.h not found at {}.", header_path.display());
+        eprintln!("Please set LLAMA_HOME (or LLAMA_CPP_BUILD) to the root of your llama.cpp installation.");
+        eprintln!("Example: export LLAMA_HOME=$HOME/src/llama.cpp/build/install\n");
+        std::process::exit(1);
+    }
 
-// For Android, use android/<arch> directory first
-if is_android {
-let android_lib_path = lib_path.join("android").join("arm64-v8a");
-if android_lib_path.exists() {
-println!("cargo:rustc-link-search=native={}", android_lib_path.display());
-}
-// Android needs to link log library for __android_log_write
-println!("cargo:rustc-link-lib=log");
-} else if lib_path.exists() {
-println!("cargo:rustc-link-search=native={}", lib_path.display());
-}
+    // For desktop (non-Android), generate bindings at build time.
+    // Android uses pre-generated bindings in src/llama/bindings.rs.
+    if !is_android {
+        let bindings = bindgen::Builder::default()
+            .header(header_path.to_str().unwrap())
+            .clang_arg(&format!("-I{}", ggml_include.display()))
+            .clang_arg(&format!("-I{}", header_path.parent().unwrap().display()))
+            // Try a common GCC include path; harmless if missing
+            .clang_arg("-isystem")
+            .clang_arg("/usr/lib/gcc/x86_64-linux-gnu/15/include")
+            .generate()
+            .expect("Unable to generate bindings");
 
-println!("cargo:rustc-link-lib=dylib=llama");
-println!("cargo:rustc-link-lib=dylib=ggml");
-println!("cargo:rustc-link-lib=dylib=ggml-cpu");
-println!("cargo:rustc-link-lib=dylib=ggml-base");
-println!("cargo:rustc-link-lib=dylib=llama-common");
+        let out_path = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("bindings.rs");
+        bindings
+            .write_to_file(&out_path)
+            .expect("Couldn't write bindings");
+    }
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let lib_path = std::path::Path::new(&manifest_dir).join("lib");
+
+    // For Android, use android/<arch> directory first
+    if is_android {
+        let android_lib_path = lib_path.join("android").join("arm64-v8a");
+        if android_lib_path.exists() {
+            println!("cargo:rustc-link-search=native={}", android_lib_path.display());
+        }
+        // Android needs to link log library for __android_log_write
+        println!("cargo:rustc-link-lib=log");
+    } else if lib_path.exists() {
+        println!("cargo:rustc-link-search=native={}", lib_path.display());
+    }
+
+    println!("cargo:rustc-link-lib=dylib=llama");
+    println!("cargo:rustc-link-lib=dylib=ggml");
+    println!("cargo:rustc-link-lib=dylib=ggml-cpu");
+    println!("cargo:rustc-link-lib=dylib=ggml-base");
+    println!("cargo:rustc-link-lib=dylib=llama-common");
 }
