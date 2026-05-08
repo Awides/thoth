@@ -1,3 +1,12 @@
+//! Thoth: A message-native application.
+//!
+//! The entire UI is driven by a message log. See ARCHITECTURE.md for design.
+//!
+//! Platform selection:
+//! - Desktop (not wasm, not android) → llama_native
+//! - Android (ARM64) → llama_android
+//! - Web (wasm) → llama_web
+
 // Desktop Linux/Windows/macOS - full native inference
 #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 #[path = "llama_native/mod.rs"]

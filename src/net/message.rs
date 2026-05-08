@@ -1,5 +1,10 @@
-//! Message schema with typed data, tags, and markdown DSL
-//! 
+//! Message schema: the core of Thoth's message-native UI.
+//!
+//! All UI is expressed as typed request messages; replies carry user input.
+//! The message log is the authoritative source of truth for state and UI.
+//!
+//! See ARCHITECTURE.md for the design rationale.
+//!
 //! Supports the cute syntax: `?text #firstname @thoth remember her name`
 //! Where:
 //! - `?text` = input type (text, number, date, etc.)

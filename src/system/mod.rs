@@ -1,5 +1,8 @@
-//! System dialog module - onboarding, key management, and device sync
-//! 
+//! System dialog module - onboarding, key management, and device sync.
+//!
+//! System interactions are expressed as message-request flows, consistent
+//! with the message-native UI architecture (see ARCHITECTURE.md).
+//!
 //! This module runs in a dedicated thread and manages system-level dialogs
 //! that are separate from the main chat interface. All interactions are
 //! message-based and appear in the main dialog flow.

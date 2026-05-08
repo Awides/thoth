@@ -2,4 +2,8 @@ models/*
 target/*
 lib/*
 src/android/assets/models/
+.idea
+.vscode
+*.swp
+.DS_Store
 

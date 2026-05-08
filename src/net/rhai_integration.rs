@@ -1,5 +1,8 @@
-//! Rhai scripting integration
-//! 
+//! Rhai scripting integration: scripts as first-class message actors.
+//!
+//! Rhai scripts can register handlers for message patterns and emit new messages,
+//! participating symmetrically in the message-native UI. See ARCHITECTURE.md.
+//!
 //! Handles:
 //! - Loading and executing Rhai scripts
 //! - Registering message handlers

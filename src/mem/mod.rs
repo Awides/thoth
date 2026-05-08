@@ -1,4 +1,7 @@
-//! Memvid persistence layer - append-only log with Roaring bitmap indexes
+//! Memvid persistence layer - append-only log with Roaring bitmap indexes.
+//!
+//! The message log is the authoritative store; this module provides durable
+//! append-only storage and fast reconstruction of app state. See ARCHITECTURE.md.
 //!
 //! Provides fast reconstruction of app state from disk using:
 //! - Frame-based serialization (snapshots + messages)
