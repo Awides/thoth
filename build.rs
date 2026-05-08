@@ -19,13 +19,22 @@ fn main() {
     }
 
     // Determine llama.cpp install prefix.
-    // Use LLAMA_HOME if set, else default to /tmp/llama.cpp-build.
-    // The directory should contain:
-    //   include/llama.h
-    //   ggml/include/
-    //   lib/ (or lib/android/arm64-v8a/ for Android)
+    // Priority:
+    // 1. LLAMA_HOME or LLAMA_CPP_BUILD env vars
+    // 2. Auto-detect: $CARGO_MANIFEST_DIR/../llama.cpp (sibling checkout)
+    // 3. Fallback: /tmp/llama.cpp-build
     let llama_home = std::env::var("LLAMA_HOME")
         .or_else(|_| std::env::var("LLAMA_CPP_BUILD"))
+        .or_else(|_| {
+            // Auto-detect sibling llama.cpp checkout
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+            let candidate = std::path::Path::new(&manifest_dir).join("../llama.cpp");
+            if candidate.exists() && candidate.join("include/llama.h").exists() {
+                Ok(candidate.to_string_lossy().into_owned())
+            } else {
+                Err(())
+            }
+        })
         .unwrap_or_else(|_| "/tmp/llama.cpp-build".to_string());
 
     let header_path = std::path::Path::new(&llama_home).join("include/llama.h");
