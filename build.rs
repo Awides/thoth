@@ -88,6 +88,6 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=ggml-cpu");
     println!("cargo:rustc-link-lib=dylib=ggml-base");
     println!("cargo:rustc-link-lib=dylib=llama-common");
-    // Embed rpath so the binary finds .so files in ./lib at runtime without LD_LIBRARY_PATH
-    println!("cargo:rustc-link-arg=-Wl,-rpath,lib");
+    // Embed rpath so the binary finds .so files in ../lib relative to the executable
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib");
 }
