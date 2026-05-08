@@ -33,7 +33,8 @@ thoth/
     ├── main.rs          # Dioxus app launcher + module declarations
     ├── app.rs           # Dioxus GUI: chat interface, llama.cpp integration, Tailwind CSS
     ├── engine.rs        # Engine abstraction (currently just Config + handle factory)
-    ├── llama.rs        # Unified native inference wrapper (desktop + Android)
+    ├── llama/          # Unified native inference wrapper (desktop + Android)
+    │   └── bindings.rs # Platform-specific bindings (generated for desktop, pre-generated for Android)
     └── test_standalone.rs  # Legacy (duplicate FFI code – not used)
 ```
 
