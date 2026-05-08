@@ -1,4 +1,5 @@
 models/*
 target/*
 lib/*
+src/android/assets/models/
 
