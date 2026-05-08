@@ -159,3 +159,9 @@ The message schema and core logic (`src/net/`) are identical across platforms; o
 - Current Nostr/MLS implementation: `src/net/`
 - Build instructions: `doc/BUILD.md`
 - Testing: `doc/RUNNING.md`
+
+## Future Considerations
+
+- **Model backend**: Currently uses PrismML's fork of llama.cpp for ternary Bonsai support. Long-term plan is to migrate to upstream llama.cpp once ternary patches are merged. There's also an alternative fork that consolidates turboquant patches with Prism's changes; we should evaluate that and any newer KV quantization methods as they emerge.
+- **Message replay**: The "event log as state" vision suggests we may want to integrate a proper event-store (e.g., SQLite with delta encoding) instead of the current append-only file for larger scales, but Memvid serves as a good MVP.
+- **WASM inference**: The web stub will eventually use llama.cpp compiled to WASM via Emscripten, running in a Web Worker, to provide local inference in the browser.

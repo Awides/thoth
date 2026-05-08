@@ -4,7 +4,7 @@ use comrak;
 
 static TAILWIND: Asset = asset!("/assets/tailwind.css");
 
-const MARKDOWN_CSS: &str = r#"
+const markdown_css: &str = r#"
 .markdown-content { font-size: 1rem; line-height: 1.75; }
 .markdown-content strong { font-weight: 600; }
 .markdown-content code { background: rgba(100,100,100,0.2); padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.875em; }
@@ -294,10 +294,9 @@ if *loading_state.read() == LoadingState::Ready {
     let current_theme = theme();
     let msgs = messages();
 
-rsx! {
-document::Stylesheet { href: TAILWIND }
-style { "html, body { height: 100%; margin: 0; padding: 0; } {MARKDOWN_CSS}" }
-div {
+    rsx! {
+        document::Stylesheet { href: TAILWIND },
+        div {
     style: format!("background: {}; color: {}; display: flex; flex-direction: column; overflow: hidden;", current_theme.bg(), current_theme.fg()),
     class: "h-screen flex flex-col",
     // Message list area

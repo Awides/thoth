@@ -19,11 +19,10 @@ pub mod bindings {
 }
 
 use self::bindings::*;
-use std::ffi::CString;
+use std::ffi::{CString, CStr};
 use std::path::Path;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 static LOG_SUPPRESSED: AtomicBool = AtomicBool::new(false);
 

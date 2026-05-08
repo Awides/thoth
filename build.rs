@@ -17,10 +17,6 @@ fn main() {
         }
         return;
     }
-            println!("cargo:rustc-link-lib=log");
-        }
-        return;
-    }
 
     // Determine llama.cpp install prefix.
     // Use LLAMA_HOME if set, else default to /tmp/llama.cpp-build.
@@ -35,16 +31,18 @@ fn main() {
     let header_path = std::path::Path::new(&llama_home).join("include/llama.h");
     let ggml_include = std::path::Path::new(&llama_home).join("ggml/include");
 
-    if !header_path.exists() {
-        eprintln!("\nERROR: llama.h not found at {}.", header_path.display());
-        eprintln!("Please set LLAMA_HOME (or LLAMA_CPP_BUILD) to the root of your llama.cpp installation.");
-        eprintln!("Example: export LLAMA_HOME=$HOME/src/llama.cpp/build/install\n");
-        std::process::exit(1);
-    }
-
-    // For desktop (non-Android), generate bindings at build time.
-    // Android uses pre-generated bindings in src/llama/bindings.rs.
+    // For desktop (non-Android), generate bindings and require headers.
     if !is_android {
+        if !header_path.exists() {
+            eprintln!("\nERROR: llama.h not found at {}.", header_path.display());
+            eprintln!("Please set LLAMA_HOME (or LLAMA_CPP_BUILD) to the root of your llama.cpp installation.");
+            eprintln!("Expected layout under LLAMA_HOME:");
+            eprintln!("  include/llama.h");
+            eprintln!("  ggml/include/");
+            eprintln!("Example: export LLAMA_HOME=$HOME/.llama.cpp\n");
+            std::process::exit(1);
+        }
+
         let bindings = bindgen::Builder::default()
             .header(header_path.to_str().unwrap())
             .clang_arg(&format!("-I{}", ggml_include.display()))
