@@ -17,22 +17,25 @@ Thoth is a Dioxus-based runtime that treats all user interfaces as structured me
 
 - Rust + `cargo`
 - Dioxus CLI (`cargo install dioxus-cli`)
-- llama.cpp headers and libraries (see [BUILD.md](doc/BUILD.md))
+- llama.cpp headers and libraries (PrismML fork). By default, the build script looks for a sibling directory `../llama.cpp` (checked out automatically). See [BUILD.md](doc/BUILD.md) for custom locations.
 
 ### Build
 
 ```bash
-# Desktop
-dx build --release
+# Desktop (auto-detects ../llama.cpp)
+cargo build --release   # or: dx build --release
 
-# Android (ARM64)
-dx build --release --target aarch64-linux-android
+# Android (ARM64) - requires Android NDK toolchain in PATH
+cargo build --release --target aarch64-linux-android
 
 # Web (WASM)
-dx build --web --release
+cargo build --target wasm32-unknown-unknown
+# or: dx build --web --release
 ```
 
-See [doc/BUILD.md](doc/BUILD.md) for detailed platform setup and [doc/RUNNING.md](doc/RUNNING.md) for test instructions.
+No need to set `LLAMA_HOME` if you have `llama.cpp` cloned next to this repo (`../llama.cpp`). The binary embeds an rpath to find `lib/` libraries automatically; no `LD_LIBRARY_PATH` needed.
+
+See [doc/BUILD.md](doc/BUILD.md) for detailed setup and [doc/RUNNING.md](doc/RUNNING.md) for test instructions.
 
 ## Architecture
 
@@ -100,6 +103,15 @@ src/
 ```
 
 ## Development
+
+### Running
+
+```bash
+cargo run           # debug
+cargo run --release # optimized
+```
+
+The binary automatically loads native libraries from `lib/`. The app prompts for a model file on first run; default path is `models/Bonsai-1.7B-Q1_0.gguf`. Use the file picker to select a different model.
 
 ### Running Tests
 
