@@ -296,14 +296,14 @@ if *loading_state.read() == LoadingState::Ready {
 
 rsx! {
 document::Stylesheet { href: TAILWIND }
-style { "{MARKDOWN_CSS}" }
+style { "html, body { height: 100%; margin: 0; padding: 0; } {MARKDOWN_CSS}" }
 div {
-    style: format!("background: {}; color: {}; display: flex; flex-direction: column; height: 100vh;", current_theme.bg(), current_theme.fg()),
+    style: format!("background: {}; color: {}; display: flex; flex-direction: column; overflow: hidden;", current_theme.bg(), current_theme.fg()),
     class: "h-screen flex flex-col",
     // Message list area
     div {
-        style: "flex: 1 1 0%; overflow-y: auto; min-height: 0;",
-        class: "p-6 pt-8 space-y-3 scroll-smooth w-full max-w-[896px] mx-auto",
+        style: "flex: 1; overflow-y: auto; min-height: 0;",
+        class: "flex-1 overflow-y-auto p-6 pt-8 space-y-3 scroll-smooth w-full max-w-[896px] mx-auto",
                 for msg in msgs.iter() {
 div {
     key: "{msg.id}",
@@ -349,9 +349,9 @@ div { class: "border rounded-lg p-4 max-w-[80%]",
                 }
             }
 div {
-    class: "shrink-0 p-3 border-t",
-                style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
-                form {
+    class: "w-full max-w-[896px] shrink-0 p-3 border-t mx-auto",
+    style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
+    form {
                     onsubmit: on_submit,
                     div { class: "flex gap-2",
                         input {
