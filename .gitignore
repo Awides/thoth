@@ -1,2 +1,4 @@
-.aider*
-models/*.gguf
+models/*
+target/*
+lib/*
+

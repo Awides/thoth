@@ -38,11 +38,6 @@ llama.cpp's GGUF format and GGML backend, while excellent for native desktop inf
 3. **Alternative Runtimes**: Explore wasm-llama, llamafile, or other WASM-optimized runtimes
 4. **Server Backend**: Offload inference to server, stream tokens via WebSocket
 
-## Files Modified
-- `src/llama_web/mod.rs` - Web Worker IPC (echo mode stub)
-- `public/worker.js` - WASM inference pipeline (non-functional)
-- `public/llama.js`, `public/llama.wasm` - Compiled llama.cpp WASM (2.2MB)
-
 ## Recommendation
 **Focus on desktop experience** where llama.cpp excels. For web demos, use echo mode or direct users to desktop app. Revisit only if:
 - Burn WGPU gains ternary Bonsai support
