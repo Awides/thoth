@@ -141,7 +141,7 @@ The message schema and core logic (`src/net/`) are identical across platforms; o
 - **Nostr client**: `src/net/nostr_client.rs`
 - **MLS groups**: `src/net/mls_group.rs`
 - **Persistence**: `src/mem/`
-- **LLM backends**: `src/llama_native/`, `src/llama_android/`, `src/llama_web/`
+- **LLM backends**: `src/llama/` (unified native), `src/llama_web/` (web stub)
 - **UI renderers** (to become message-driven): `src/app.rs`, `src/android_app.rs`, `src/web_app.rs`
 - **Plugins & config**: `src/system/`
 

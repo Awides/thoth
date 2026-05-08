@@ -91,8 +91,7 @@ src/
 ├── system/             # Dialogs, config, commands, onboarding
 ├── key_storage/        # Encrypted credentials
 ├── mem/                # Persistence layer (native/web)
-├── llama_native/       # Desktop inference (llama.cpp)
-├── llama_android/      # Android inference (llama.cpp)
+├── llama/              # Unified inference (desktop + Android)
 ├── llama_web/          # Web inference stub (worker)
 ├── main.rs             # Platform dispatch
 ├── app.rs              # Desktop UI (should become message-renderer-only)

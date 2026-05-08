@@ -1,9 +1,21 @@
-//! Android native llama.cpp inference engine
-//! Uses the same FFI bindings as desktop, but with Android-specific paths
+//! Unified llama.cpp FFI wrapper for desktop (Linux/macOS/Windows) and Android.
+//!
+//! This module provides a safe, async-friendly interface to llama.cpp inference,
+//! with identical functionality on desktop and Android. Platform differences
+//! (bindings source, model library paths) are handled via conditional compilation.
+//!
+//! See ARCHITECTURE.md for how the inference engine fits into the message-native UI.
 
-// Use pre-generated bindings for Android (bindgen doesn't work on cross-compile)
+/// Platform-specific bindings to llama.cpp.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
 pub mod bindings {
-    include!("../llama/bindings.rs");
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+
+/// Android uses pre-generated bindings because bindgen doesn't work in cross-compile.
+#[cfg(target_os = "android")]
+pub mod bindings {
+    include!("bindings.rs");
 }
 
 use self::bindings::*;
@@ -15,6 +27,7 @@ use std::sync::Arc;
 
 static LOG_SUPPRESSED: AtomicBool = AtomicBool::new(false);
 
+/// Silence llama.cpp logs (call once at startup).
 pub fn suppress_llama_logging() {
     if LOG_SUPPRESSED.swap(true, Ordering::SeqCst) {
         return;
@@ -28,7 +41,8 @@ unsafe extern "C" fn silent_log_callback(
     _level: ggml_log_level,
     _text: *const std::os::raw::c_char,
     _user_data: *mut std::os::raw::c_void,
-) {}
+) {
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -80,9 +94,7 @@ impl Engine {
         let path = path.as_ref();
         let path_cstr = CString::new(path.to_string_lossy().as_bytes())?;
         suppress_llama_logging();
-        unsafe {
-            llama_backend_init();
-        }
+        unsafe { llama_backend_init() }
         let mut params = unsafe { llama_model_default_params() };
         params.n_gpu_layers = config.n_gpu_layers as i32;
         params.use_mmap = config.use_mmap;
@@ -98,9 +110,7 @@ impl Engine {
         ctx_params.n_threads_batch = config.n_threads;
         let ctx = unsafe { llama_init_from_model(model, ctx_params) };
         if ctx.is_null() {
-            unsafe {
-                llama_model_free(model);
-            }
+            unsafe { llama_model_free(model) };
             anyhow::bail!("Failed to create context");
         }
         let sampler = unsafe { llama_sampler_chain_init(llama_sampler_chain_default_params()) };
@@ -113,27 +123,19 @@ impl Engine {
         }
         let t = unsafe { llama_sampler_init_temp(config.temperature) };
         if !t.is_null() {
-            unsafe {
-                llama_sampler_chain_add(sampler, t);
-            }
+            unsafe { llama_sampler_chain_add(sampler, t); }
         }
         let t = unsafe { llama_sampler_init_top_k(config.top_k) };
         if !t.is_null() {
-            unsafe {
-                llama_sampler_chain_add(sampler, t);
-            }
+            unsafe { llama_sampler_chain_add(sampler, t); }
         }
         let t = unsafe { llama_sampler_init_top_p(config.top_p, 1) };
         if !t.is_null() {
-            unsafe {
-                llama_sampler_chain_add(sampler, t);
-            }
+            unsafe { llama_sampler_chain_add(sampler, t); }
         }
         let t = unsafe { llama_sampler_init_greedy() };
         if !t.is_null() {
-            unsafe {
-                llama_sampler_chain_add(sampler, t);
-            }
+            unsafe { llama_sampler_chain_add(sampler, t); }
         }
         Ok(Self {
             model,
@@ -165,6 +167,7 @@ impl Engine {
     where
         F: FnMut(StreamEvent) -> Result<(), ()>,
     {
+        // Reset context to ensure stateless inference per request
         self.reset()?;
         let cstr = CString::new(prompt)?;
         let mut tokens = vec![0i32; prompt.len() * 2];
@@ -204,7 +207,7 @@ impl Engine {
                     vocab,
                     &token,
                     1,
-                    buf.as_mut_ptr(),
+                    buf.as_mut_ptr() as *mut i8,
                     buf.len() as i32,
                     false,
                     true,
@@ -212,12 +215,12 @@ impl Engine {
             };
             if n > 0 {
                 if let Ok(s) = std::str::from_utf8(&buf[..n as usize]) {
+                    // Handle Qwen3 thinking tags: strip them but signal UI
+                    // Check token text via llama_token_get_text to get the actual vocab string
                     let token_str = unsafe {
                         let ptr = llama_token_get_text(vocab, token);
                         if !ptr.is_null() {
-                            std::ffi::CStr::from_ptr(ptr)
-                                .to_string_lossy()
-                                .into_owned()
+                            CStr::from_ptr(ptr).to_string_lossy().into_owned()
                         } else {
                             s.to_string()
                         }
@@ -238,9 +241,7 @@ impl Engine {
                     }
                 }
             }
-            unsafe {
-                llama_sampler_accept(self.sampler, token);
-            }
+            unsafe { llama_sampler_accept(self.sampler, token); }
             let mut t = token;
             let batch = unsafe { llama_batch_get_one(&mut t, 1) };
             if unsafe { llama_decode(self.ctx, batch) } != 0 {
@@ -268,6 +269,8 @@ impl Drop for Engine {
     }
 }
 
+// ─── Command protocol ─────────────────────────────────────────────────────────
+
 #[derive(Debug)]
 pub enum Command {
     Load(String, Config, tokio::sync::oneshot::Sender<Result<()>>),
@@ -279,25 +282,26 @@ pub enum Command {
     Unload(tokio::sync::oneshot::Sender<Result<()>>),
 }
 
-pub fn spawn_inference_thread() -> std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<Command>>>>
-{
+/// Spawn a persistent std::thread that owns the engine.
+/// Uses std::sync::mpsc channel (Send + Sync via tokio oneshot for responses).
+/// Returns Arc<Mutex<Option<std::mpsc::Sender<Command>>>> so any thread can send commands.
+pub fn spawn_inference_thread(
+) -> std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<Command>>>> {
     let (tx, rx) = std::sync::mpsc::channel();
     let shared_tx: std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<Command>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
 
     std::thread::spawn(move || {
+        // Engine stored as raw pointer — zero-sized in captures, trivially Send
         let mut engine_ptr: *mut Option<Engine> = Box::into_raw(Box::new(None));
         loop {
+            // Use try_recv in a loop (no blocking, no tokio runtime needed in this thread)
             match rx.try_recv() {
                 Ok(Command::Load(path, config, resp)) => {
-                    unsafe {
-                        *engine_ptr = None;
-                    }
+                    unsafe { *engine_ptr = None; }
                     match Engine::load(&path, config) {
                         Ok(e) => {
-                            unsafe {
-                                *engine_ptr = Some(e);
-                            }
+                            unsafe { *engine_ptr = Some(e); }
                             let _ = resp.send(Ok(()));
                         }
                         Err(e) => {
@@ -319,41 +323,39 @@ pub fn spawn_inference_thread() -> std::sync::Arc<std::sync::Mutex<Option<std::s
                                 let _ = resp.send(Ok(()));
                             }
                             Err(err) => {
-                                let _ =
-                                    event_tx.send(StreamEvent::Error(format!(
-                                        "Inference error: {}",
-                                        err
-                                    )));
+                                let _ = event_tx.send(StreamEvent::Error(format!(
+                                    "Inference error: {}",
+                                    err
+                                )));
                                 let _ = resp.send(Err(err));
                             }
                         }
                     } else {
-                        let _ =
-                            event_tx.send(StreamEvent::Error("No model loaded".into()));
+                        let _ = event_tx.send(StreamEvent::Error("No model loaded".into()));
                         let _ = resp.send(Err(anyhow::anyhow!("No model loaded")));
                     }
                 }
                 Ok(Command::Unload(resp)) => {
-                    unsafe {
-                        *engine_ptr = None;
-                    }
+                    unsafe { *engine_ptr = None; }
                     let _ = resp.send(Ok(()));
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // No command ready — yield to OS to avoid busy-waiting
                     std::thread::sleep(std::time::Duration::from_micros(100));
                 }
             }
         }
-        unsafe {
-            *engine_ptr = None;
-            Box::from_raw(engine_ptr);
-        }
+        // Clean up engine on thread exit
+        unsafe { *engine_ptr = None; Box::from_raw(engine_ptr); }
     });
 
     shared_tx
 }
 
+// ─── Public async helpers ─────────────────────────────────────────────────────
+
+/// Load a model into the inference thread.
 pub async fn load_model(
     handle: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<Command>>>>,
     path: String,
@@ -367,10 +369,10 @@ pub async fn load_model(
             .ok_or_else(|| anyhow::anyhow!("Engine not started"))?;
         let _ = tx.send(Command::Load(path, config, resp));
     }
-    rx.await
-        .map_err(|e| anyhow::anyhow!("Channel closed: {}", e))?
+    rx.await.map_err(|e| anyhow::anyhow!("Channel closed: {}", e))?
 }
 
+/// Start inference on a prompt; returns receiver for stream events.
 pub fn infer_stream(
     handle: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<Command>>>>,
     prompt: String,
@@ -388,6 +390,7 @@ pub fn infer_stream(
     Ok((event_rx, result_rx))
 }
 
+/// Unload the model and stop the inference thread (dropping the handle does this implicitly).
 pub async fn unload(
     handle: &std::sync::Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<Command>>>>,
 ) -> Result<()> {
