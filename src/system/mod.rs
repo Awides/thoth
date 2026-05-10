@@ -7,11 +7,13 @@
 //! that are separate from the main chat interface. All interactions are
 //! message-based and appear in the main dialog flow.
 
-pub mod key_manager;
-pub mod config;
-pub mod dialog;
-pub mod commands;
-pub mod features;
+ pub mod key_manager;
+ pub mod config;
+ pub mod dialog;
+ pub mod commands;
+ pub mod features;
+ pub mod model;
+ pub mod identity;
 
 use std::sync::Arc;
 use tokio::sync::mpsc;

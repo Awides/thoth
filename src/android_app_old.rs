@@ -201,8 +201,8 @@ pub fn App() -> Element {
                                         }
                                     });
                                     break;
-                                }
-                            }
+                 },
+             }
                         }
                     }
                     Err(e) => {
@@ -230,30 +230,30 @@ pub fn App() -> Element {
     let msgs = messages();
 
     rsx! {
-        document::Stylesheet { href: TAILWIND }
+        document::Stylesheet { href: TAILWIND },
         div {
             class: "h-screen flex flex-col",
             style: format!("background: {}; color: {}", current_theme.bg(), current_theme.fg()),
             div {
                 class: "flex-1 overflow-y-auto p-4 space-y-3 min-h-0 scroll-smooth flex flex-col-reverse",
-                for msg in msgs.iter().rev() {
-                    div {
-                        key: "{msg.id}",
-                        class: format!("p-3 rounded-lg max-w-[80%] break-words {}", 
-                            match msg.role { MessageRole::User => "self-end", _ => "self-start" }
-                        ),
-                        style: format!("background: {}", match msg.role {
-                            MessageRole::User => "#3b82f6",
-                            MessageRole::Assistant => current_theme.panel(),
-                            MessageRole::System => "#5c2d2d",
-                        }),
-                        if !msg.thinking.is_empty() {
-                            pre { class: "text-sm italic opacity-80 mb-1 whitespace-pre-wrap font-inherit font-light", "{msg.thinking}" }
-                        }
-                        pre { class: "m-0 whitespace-pre-wrap font-inherit", "{msg.content}" }
-                    }
-                }
-                div {
+                 for msg in msgs.iter().rev() {
+                      div {
+                          key: "{msg.id}",
+                         class: format!("p-3 rounded-lg max-w-[80%] break-words {}", 
+                             match msg.role { MessageRole::User => "self-end", _ => "self-start" }
+                         ),
+                         style: format!("background: {}", match msg.role {
+                             MessageRole::User => "#3b82f6",
+                             MessageRole::Assistant => current_theme.panel(),
+                             MessageRole::System => "#5c2d2d",
+                         }),
+                           if !msg.thinking.is_empty() {
+                               pre { class: "text-sm italic opacity-80 mb-1 whitespace-pre-wrap font-inherit font-light", {"thinking..."} }
+                           },
+                           pre { class: "m-0 whitespace-pre-wrap font-inherit", {msg.content.clone()} }
+                 }
+             },
+             div {
                     class: "h-px w-full",
                     onmounted: move |event| {
                         spawn(async move {
@@ -262,29 +262,29 @@ pub fn App() -> Element {
                         });
                     },
                 }
-            }
-            div {
+                  },
+                 div {
                 class: "p-3 border-t",
                 style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
                 form {
                     onsubmit: on_submit,
                     div { class: "flex gap-2",
-                        input {
-                            r#type: "text",
-                            autofocus: true,
-                            placeholder: match loading_state() { LoadingState::Loading => "Loading…", _ => "Prompt…" },
-                            disabled: matches!(loading_state(), LoadingState::Loading),
-                            value: "{input.read()}",
-                            oninput: move |e| *input.write() = e.data.value(),
-                            class: "flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500",
-                            style: format!("background: {}; color: {}; border-color: {}", current_theme.bg(), current_theme.fg(), current_theme.border()),
-                            onmounted: move |event| {
-                                spawn(async move {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                                    let _ = event.set_focus(true).await;
-                                });
-                            },
-                        }
+                         input {
+                             r#type: "text",
+                             autofocus: true,
+                             placeholder: match loading_state() { LoadingState::Loading => "Loading…", _ => "Prompt…" },
+                             disabled: matches!(loading_state(), LoadingState::Loading),
+                             value: input.read().clone(),
+                             oninput: move |e| *input.write() = e.data.value(),
+                             class: "flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500",
+                             style: format!("background: {}; color: {}; border-color: {}", current_theme.bg(), current_theme.fg(), current_theme.border()),
+                             onmounted: move |event| {
+                                 spawn(async move {
+                                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                     let _ = event.set_focus(true).await;
+                                 });
+                             },
+                         }
                         button {
                             r#type: "submit",
                             disabled: is_loading() || matches!(loading_state(), LoadingState::Loading) || input.read().trim().is_empty(),

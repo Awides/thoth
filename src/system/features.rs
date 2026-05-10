@@ -120,7 +120,7 @@ impl ScriptEngine {
     }
     
     /// Load script
-    pub fn load_script(&self, name: &str, code: &str) -> Result<()> {
+    pub fn load_script(&self, _name: &str, _code: &str) -> Result<()> {
         // In production: compile and register Rhai script
         Ok(())
     }

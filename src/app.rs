@@ -1,385 +1,525 @@
 use dioxus::prelude::*;
+#[cfg(any(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    all(target_os = "android", target_arch = "aarch64")
+))]
 use crate::llama;
-use comrak;
+use crate::shared::{Message, MessageRole, MessageKind, LoadingState, Theme, now_secs};
+use crate::ui::{self, MessageList, InputArea};
+use crate::system::model;
+use crate::system::config::{self, AppConfig};
+use bip39::Mnemonic;
+use hostname;
+use nostr_sdk::{Keys, ToBech32};
 
 static TAILWIND: Asset = asset!("/assets/tailwind.css");
 
 const markdown_css: &str = r#"
 .markdown-content { font-size: 1rem; line-height: 1.75; }
+.markdown-content h1 { font-size: 3.5rem; line-height: 1.1; }
 .markdown-content strong { font-weight: 600; }
 .markdown-content code { background: rgba(100,100,100,0.2); padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.875em; }
 .markdown-content pre { background: rgba(100,100,100,0.15); padding: 0.75rem 1rem; border-radius: 0.375rem; overflow-x: auto; margin: 0.5rem 0; }
 .markdown-content pre code { background: transparent; padding: 0; }
 "#;
 
-#[derive(Clone, PartialEq, Copy)]
-pub enum MessageRole { User, Assistant, System }
+#[cfg(target_os = "android")]
+const ANDROID_MODEL_DATA: &[u8] = include_bytes!("android/assets/models/Bonsai-1.7B-Q1_0.gguf");
 
-#[derive(Clone, PartialEq)]
-enum MessageKind {
-    /// Regular text — rendered as markdown
-    Text,
-    /// Typed, tagged request for structured user input
-    Request { request_type: String, tag: String },
-}
+#[cfg(target_os = "android")]
+fn ensure_android_model_extracted() -> Option<String> {
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::path::Path;
 
-#[derive(Clone, PartialEq)]
-struct Message {
-    id: u64,
-    role: MessageRole,
-    content: String,
-    thinking: String,
-    kind: MessageKind,
-}
-
-#[component]
-fn Markdown(content: String) -> Element {
-    let html = comrak::markdown_to_html(&content, &comrak::ComrakOptions::default());
-    rsx! {
-        div { class: "markdown-content", dangerous_inner_html: "{html}" }
+    let model_path = "/data/data/com.example.Thoth/files/models/Bonsai-1.7B-Q1_0.gguf";
+    if Path::new(model_path).exists() {
+        return Some(model_path.to_string());
     }
+    let model_dir = Path::new(model_path).parent()?;
+    fs::create_dir_all(model_dir).ok()?;
+    let mut file = File::create(model_path).ok()?;
+    file.write_all(ANDROID_MODEL_DATA).ok()?;
+    eprintln!("Model extracted to: {}", model_path);
+    Some(model_path.to_string())
 }
 
-#[derive(Clone, PartialEq, Debug)]
-enum LoadingState { Loading, Ready, Error(String) }
-
-#[derive(Clone, PartialEq, Debug)]
-enum Theme { Light, Dark }
-
-impl Theme {
-    fn toggle(&self) -> Self {
-        match self { Theme::Light => Theme::Dark, Theme::Dark => Theme::Light }
-    }
-    fn bg(&self) -> &'static str { match self { Theme::Light => "#fafafa", Theme::Dark => "#0d0d0d" } }
-    fn fg(&self) -> &'static str { match self { Theme::Light => "#171717", Theme::Dark => "#ededed" } }
-    fn panel(&self) -> &'static str { match self { Theme::Light => "#f0f0f0", Theme::Dark => "#1a1a1a" } }
-    fn border(&self) -> &'static str { match self { Theme::Light => "#e5e5e5", Theme::Dark => "#262626" } }
+#[cfg(not(target_os = "android"))]
+fn ensure_android_model_extracted() -> Option<String> {
+    None
 }
 
 pub fn App() -> Element {
-    let mut theme = use_signal_sync(|| Theme::Dark);
-    let mut messages = use_signal_sync(|| Vec::<Message>::new());
-    let mut next_id = use_signal_sync(|| 0u64);
+    let theme = use_signal_sync(|| Theme::Dark);
+    let messages = use_signal_sync(|| Vec::<Message>::new());
+    let next_id = use_signal_sync(|| 0u64);
     let mut is_loading = use_signal_sync(|| false);
-    let mut loading_state = use_signal_sync(|| LoadingState::Loading);
-    let mut input = use_signal(|| String::new());
+    let loading_state = use_signal_sync(|| LoadingState::Loading);
+    let input = use_signal(|| String::new());
+    let mut at_bottom = use_signal(|| true);
+    let mut has_new = use_signal(|| false);
 
-    // Spawn inference thread - store handle persistently in a signal
+    #[cfg(any(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    all(target_os = "android", target_arch = "aarch64")
+))]
     let handle = use_signal_sync(|| llama::spawn_inference_thread());
 
-    // Load model at startup
-    let model_path = "/home/awides/dev/bn/models/Bonsai-1.7B-Q1_0.gguf".to_string();
-    let config = llama::Config {
-        n_ctx: 512, n_gpu_layers: 99, n_threads: 8, n_batch: 512,
-        use_mmap: true, temperature: 0.7, top_p: 0.9, top_k: 40,
+    #[cfg(any(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    all(target_os = "android", target_arch = "aarch64")
+))]
+    let _fut = {
+        let handle_c = handle.clone();
+    let llama_config = llama::Config {
+        n_ctx: 2048,
+        n_gpu_layers: if cfg!(target_os = "android") { 0 } else { 99 },
+        n_threads: if cfg!(target_os = "android") { 4 } else { 8 },
+        n_batch: 512,
+        use_mmap: true,
+        temperature: 0.5,
+        top_p: 0.85,
+        top_k: 20,
+        repeat_penalty: 1.5,
     };
-
-let handle_c = handle.clone();
-let ls_load = loading_state.clone();
-let il_load = is_loading.clone();
-let msgs = messages.clone();
-let nid = next_id.clone();
-let _fut = use_future(move || {
-        let h = handle_c.read().clone();
-        let mut ls = ls_load.clone();
-        let mut il = il_load.clone();
-        let c = config.clone();
-        let p = model_path.clone();
+        let ls_load = loading_state.clone();
+        let il_load = is_loading.clone();
+        let mut nid = next_id.clone();
+        let mut msgs = messages.clone();
+        let mut theme_detect = theme.clone();
+        use_future(move || {
+            let h = handle_c.read().clone();
+            let mut ls = ls_load.clone();
+            let mut il = il_load.clone();
+            let c = llama_config.clone();
+            let mut td = theme_detect.clone();
         async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+            let is_dark = {
+                let scheme = std::process::Command::new("gsettings")
+                    .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .unwrap_or_default();
+                if scheme.contains("prefer-dark") {
+                    true
+                } else if scheme.contains("prefer-light") {
+                    false
+                } else {
+                    std::process::Command::new("gsettings")
+                        .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| s.to_lowercase().contains("dark"))
+                        .unwrap_or(true)
+                }
+            };
+            #[cfg(any(target_os = "android", target_arch = "wasm32"))]
+            let is_dark = true;
+            if !is_dark {
+                td.set(Theme::Light);
+            }
             il.set(true);
-            ls.set(LoadingState::Loading);
-            eprintln!("DEBUG: starting model load...");
+                ls.set(LoadingState::Loading);
+
+                let p = if cfg!(target_os = "android") {
+                    match ensure_android_model_extracted() {
+                        Some(path) => path,
+                        None => {
+                            eprintln!("ERROR: Android model extraction failed");
+                            ls.set(LoadingState::Error("Model extraction failed".to_string()));
+                            il.set(false);
+                            return;
+                        }
+                    }
+                } else {
+                    match crate::system::model::get_model_path() {
+                        Some(path) => path.to_string_lossy().into_owned(),
+                        None => {
+                            eprintln!("ERROR: Model not found. Please ensure model is bundled or placed in ~/.local/share/thoth/models/Bonsai-1.7B-Q1_0.gguf");
+                            ls.set(LoadingState::Error("Model not available".to_string()));
+                            il.set(false);
+                            return;
+                        }
+                    }
+                };
+
             match llama::load_model(&h, p, c).await {
                 Ok(_) => {
-                    eprintln!("DEBUG: model loaded successfully");
-ls.set(LoadingState::Ready);
-                    // Show welcome on first launch
-                    let msgs_w = msgs.clone();
-                    let nid_w = nid.clone();
-                    let need_onboard = crate::system::config::needs_onboarding();
-                    tokio::spawn(async move {
-                        let mut ms = msgs_w;
-                        let mut n = nid_w;
-                        if need_onboard {
-                            let prompts: Vec<(&str, u64)> = vec![
-                                ("👋 Welcome to Thoth!", 600),
-                                ("I'm your decentralized AI assistant.", 600),
-                                ("Let's get you set up…", 400),
-                            ];
-                            for (text, delay) in &prompts {
-                                let id = n();
-                                n.set(id + 1);
-                                ms.with_mut(|v| {
-                                    v.push(Message {
-                                        id,
-                                        role: MessageRole::System,
-                                        content: String::new(),
-                                        thinking: String::new(),
-                                        kind: MessageKind::Text,
-                                    });
-                                });
-                                for ch in text.chars() {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+                    ls.set(LoadingState::Ready);
+                        // Send welcome message
+                        let current_id = nid();
+                        nid.set(current_id + 1);
+                        msgs.with_mut(|v| v.push(Message {
+                            id: current_id,
+                            role: MessageRole::System,
+                            content: "# *THOTH ▷*".to_string(),
+                            thinking: String::new(),
+                            kind: MessageKind::Text,
+                timestamp: now_secs(),
+                        }));
+                    }
+                Err(e) => {
+                    ls.set(LoadingState::Error(format!("Load error: {}", e)));
+                    }
+                }
+                il.set(false);
+            }
+        })
+    };
+
+    #[cfg(any(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    all(target_os = "android", target_arch = "aarch64")
+))]
+    let mut process_input = {
+    let handle = handle.clone();
+    let msgs = messages.clone();
+    let nid = next_id.clone();
+    let il = is_loading.clone();
+    let t = theme.clone();
+    move |input: String| {
+        let mut msgs = msgs;
+        let mut nid = nid;
+        let mut il = il;
+        let mut t = t;
+            let trimmed = input.trim().to_string();
+            if trimmed.is_empty() { return; }
+
+            if trimmed.starts_with("/theme") { t.set(t().toggle()); return; }
+            if trimmed.starts_with("/light") { t.set(Theme::Light); return; }
+            if trimmed.starts_with("/dark") { t.set(Theme::Dark); return; }
+
+            // Backup and login commands
+            if trimmed == "/backup" {
+                let path = config::get_config_path();
+                match AppConfig::load(&path) {
+                    Ok(cfg) => {
+                        if let Some(mnemonic) = cfg.mnemonic_encrypted {
+                            let msg_id = nid();
+                            nid.set(msg_id + 1);
+                            let _ = msgs.with_mut(|v| v.push(Message {
+                                id: msg_id,
+                                role: MessageRole::System,
+                                content: format!("**Your backup phrase:**\n\n`{}`\n\nWrite this down and store it safely. Anyone with this phrase can access your identity.", mnemonic),
+                                thinking: String::new(),
+                                kind: MessageKind::Text,
+                timestamp: now_secs(),
+                            }));
+                        } else {
+                            let msg_id = nid();
+                            nid.set(msg_id + 1);
+                            let _ = msgs.with_mut(|v| v.push(Message {
+                                id: msg_id,
+                                role: MessageRole::System,
+                                content: "No backup phrase found. Use `/login <mnemonic>` to set up your identity with a backup phrase, or start chatting to generate a new identity.".to_string(),
+                                thinking: String::new(),
+                                kind: MessageKind::Text,
+                timestamp: now_secs(),
+                            }));
+                        }
+                    }
+                    Err(e) => {
+                        let msg_id = nid();
+                        nid.set(msg_id + 1);
+                        let _ = msgs.with_mut(|v| v.push(Message {
+                            id: msg_id,
+                            role: MessageRole::System,
+                            content: format!("Error loading config: {}", e),
+                            thinking: String::new(),
+                            kind: MessageKind::Text,
+                timestamp: now_secs(),
+                        }));
+                    }
+                }
+                return;
+            }
+            if trimmed.starts_with("/login ") {
+                let mnemonic_str = trimmed["/login ".len()..].trim();
+                if mnemonic_str.is_empty() {
+                    let msg_id = nid();
+                    nid.set(msg_id + 1);
+                    let _ = msgs.with_mut(|v| v.push(Message {
+                        id: msg_id,
+                        role: MessageRole::System,
+                        content: "Usage: `/login <12-word backup phrase>`".to_string(),
+                        thinking: String::new(),
+                        kind: MessageKind::Text,
+                timestamp: now_secs(),
+                    }));
+                    return;
+                }
+                match Mnemonic::parse(mnemonic_str) {
+                    Ok(mnemonic) => {
+                        let keys = Keys::generate();
+                        let secret_hex = keys.secret_key().to_secret_hex();
+                        match keys.public_key().to_bech32() {
+                            Ok(public_bech32) => {
+                                let device_name = hostname::get()
+                                    .unwrap_or_else(|_| "unknown".into())
+                                    .to_string_lossy()
+                                    .into_owned();
+                                let path = config::get_config_path();
+                                let mut cfg = AppConfig::load(&path).unwrap_or_default();
+                                cfg.mnemonic_encrypted = Some(mnemonic.to_string());
+                                cfg.nostr_secret_key_hex = Some(secret_hex);
+                                let pubkey_for_display = public_bech32.clone();
+                                cfg.nostr_public_key = Some(public_bech32);
+                                cfg.device_name = Some(device_name);
+                                cfg.onboarding_completed = true;
+                                match cfg.save(&path) {
+                                    Ok(()) => {
+                                        let msg_id = nid();
+                                        nid.set(msg_id + 1);
+                                        let _ = msgs.with_mut(|v| v.push(Message {
+                                            id: msg_id,
+                                            role: MessageRole::System,
+                                             content: format!("✅ **Identity restored!**\n\nYour public key: `{}`\n\nBackup phrase saved. You can now use Thoth with your identity.", pubkey_for_display),
+                                            thinking: String::new(),
+                                            kind: MessageKind::Text,
+                timestamp: now_secs(),
+                                        }));
+                                    }
+                                    Err(e) => {
+                                        let msg_id = nid();
+                                        nid.set(msg_id + 1);
+                                        let _ = msgs.with_mut(|v| v.push(Message {
+                                            id: msg_id,
+                                            role: MessageRole::System,
+                                            content: format!("Error saving config: {}", e),
+                                            thinking: String::new(),
+                                            kind: MessageKind::Text,
+                timestamp: now_secs(),
+                                        }));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let msg_id = nid();
+                                nid.set(msg_id + 1);
+                                let _ = msgs.with_mut(|v| v.push(Message {
+                                    id: msg_id,
+                                    role: MessageRole::System,
+                                    content: format!("Error deriving public key: {}", e),
+                                    thinking: String::new(),
+                                    kind: MessageKind::Text,
+                timestamp: now_secs(),
+                                }));
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        let msg_id = nid();
+                        nid.set(msg_id + 1);
+                        let _ = msgs.with_mut(|v| v.push(Message {
+                            id: msg_id,
+                            role: MessageRole::System,
+                            content: "Invalid backup phrase. Please check the 12 words and try again.".to_string(),
+                            thinking: String::new(),
+                            kind: MessageKind::Text,
+                timestamp: now_secs(),
+                        }));
+                    }
+                }
+                return;
+            }
+
+            let uid = nid();
+            nid.set(uid + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: uid, role: MessageRole::User, content: trimmed.clone(),
+                thinking: String::new(), kind: MessageKind::Text,
+                timestamp: now_secs(),
+            }));
+
+            let aid = nid();
+            nid.set(aid + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: aid, role: MessageRole::Assistant, content: String::new(),
+                thinking: String::new(), kind: MessageKind::Text,
+                timestamp: now_secs(),
+            }));
+
+            il.set(true);
+        let h = handle.read().clone();
+        let prompt = format!("<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", trimmed);
+        let msgs = msgs.clone();
+        let il = il.clone();
+        tokio::spawn(async move {
+            let mut ms = msgs;
+            let mut il = il;
+            match llama::infer_stream(&h, prompt) {
+                Ok((mut rx, _)) => {
+                    let mut in_thinking = false;
+                        while let Some(event) = rx.recv().await {
+                            match event {
+                                llama::StreamEvent::ThinkingStart => { in_thinking = true; }
+                                llama::StreamEvent::ThinkingEnd => { in_thinking = false; }
+                                llama::StreamEvent::Token(token) => {
                                     ms.with_mut(|v| {
-                                        if let Some(msg) = v.iter_mut().find(|m| m.id == id) {
-                                            msg.content.push(ch);
+                                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                            if in_thinking { msg.thinking.push_str(&token); }
+                                            else { msg.content.push_str(&token); }
                                         }
                                     });
                                 }
-                                tokio::time::sleep(tokio::time::Duration::from_millis(*delay)).await;
+                                llama::StreamEvent::Done(_) => {}
+                                llama::StreamEvent::Error(e) => {
+                                    ms.with_mut(|v| {
+                                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                            msg.content = format!("Error: {}", e);
+                                        }
+                                    });
+                                    break;
+                                }
                             }
-// Final prompt + request (typed)
-let pid = n();
-n.set(pid + 1);
-let prompt_text = "# How would you like to proceed?";
-ms.with_mut(|v| {
-    v.push(Message {
-        id: pid,
-        role: MessageRole::System,
-        content: String::new(),
-        thinking: String::new(),
-        kind: MessageKind::Text,
-    });
-});
-for ch in prompt_text.chars() {
-    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
-    ms.with_mut(|v| {
-        if let Some(msg) = v.iter_mut().find(|m| m.id == pid) {
-            msg.content.push(ch);
-        }
-    });
-}
-// Small delay, then add the Request
-tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
-                            let rid = n();
-                            n.set(rid + 1);
-                            ms.with_mut(|v| {
-                                v.push(Message {
-                                    id: rid,
-                                    role: MessageRole::System,
-                                    content: String::new(),
-                                    thinking: String::new(),
-kind: MessageKind::Request {
-    request_type: "choice".to_string(),
-    tag: "onboard-start".to_string(),
-},
-                                });
-                            });
                         }
-                    });
-                }
-                Err(e) => {
-                    eprintln!("DEBUG: model load error: {}", e);
-                    ls.set(LoadingState::Error(format!("Load error: {}", e)));
-                }
-            }
-            il.set(false);
-        }
-    });
-
-    // Process input
-    let process_input = {
-        let handle = handle.clone();
-        let msgs = messages.clone();
-        let nid = next_id.clone();
-        let il = is_loading.clone();
-        let t = theme.clone();
-
-move |input: String| {
-let mut msgs = msgs;
-let mut nid = nid;
-let mut il = il;
-let mut t = t;
-let handle = handle;
-let trimmed = input.trim().to_string();
-
-// Handle slash commands locally — don't send to assistant
-if trimmed.starts_with("/theme") {
-    t.set(t().toggle());
-    return;
-}
-if trimmed.starts_with("/light") {
-    t.set(Theme::Light);
-    return;
-}
-if trimmed.starts_with("/dark") {
-    t.set(Theme::Dark);
-    return;
-}
-
-let id = nid();
-nid.set(id + 1);
-msgs.with_mut(|v| {
-    v.push(Message { id, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text })
-});
-
-il.set(true);
-let aid = nid();
-nid.set(aid + 1);
-msgs.with_mut(|v| {
-    v.push(Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text })
-});
-
-let ms = msgs.clone();
-let il2 = il.clone();
-let h2 = handle.read().clone();
-let prompt = format!(
-    "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-    trimmed
-);
-
-tokio::spawn(async move {
-    let mut ms = ms;
-    let mut il2 = il2;
-    eprintln!("DEBUG: starting infer_stream...");
-    match llama::infer_stream(&h2, prompt) {
-        Ok((mut rx, _)) => {
-            let mut in_thinking = false;
-            while let Some(event) = rx.recv().await {
-                match event {
-                    llama::StreamEvent::ThinkingStart => { in_thinking = true; }
-                    llama::StreamEvent::ThinkingEnd => { in_thinking = false; }
-                    llama::StreamEvent::Token(token) => {
-                        ms.with_mut(|v| {
-                            if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                                if in_thinking { msg.thinking.push_str(&token); }
-                                else { msg.content.push_str(&token); }
-                            }
-                        });
                     }
-                    llama::StreamEvent::Done(_) => {}
-                    llama::StreamEvent::Error(e) => {
+                    Err(e) => {
                         ms.with_mut(|v| {
                             if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
                                 msg.content = format!("Error: {}", e);
                             }
                         });
-                        break;
                     }
-                }
-            }
         }
-        Err(e) => {
-            ms.with_mut(|v| {
-                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                    msg.content = format!("Error: {}", e);
-                }
-            });
+        il.set(false);
+    });
         }
-    }
-    il2.set(false);
-});
-}
     };
 
-let on_submit = move |e: FormEvent| {
-e.prevent_default();
-let val = input.read().trim().to_string();
-if val.is_empty() {
-    return;
-}
-// Allow slash commands even while model is loading
-if val.starts_with('/') {
-    *input.write() = String::new();
-    process_input(val);
-    return;
-}
-// Real prompts need the model ready
-if *loading_state.read() == LoadingState::Ready {
-    *input.write() = String::new();
-    process_input(val);
-}
-};
+    #[cfg(target_arch = "wasm32")]
+    {
+        loading_state.set(LoadingState::Ready);
+
+        let msgs = messages.clone();
+        let nid = next_id.clone();
+        let id = nid();
+        nid.set(id + 1);
+        msgs.with_mut(|v| v.push(Message {
+            id, role: MessageRole::System,
+            content: "Web UI: local inference not available. Please use desktop or Android app.".to_string(),
+            thinking: String::new(), kind: MessageKind::Text,
+                timestamp: now_secs(),
+        }));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    let mut process_input = {
+        let msgs = messages.clone();
+        let nid = next_id.clone();
+        let il = is_loading.clone();
+        move |input: String| {
+            let mut msgs = msgs;
+            let mut nid = nid;
+            let mut il = il;
+            il.set(true);
+            let trimmed = input.trim().to_string();
+            if trimmed.is_empty() { il.set(false); return; }
+
+            let uid = nid();
+            nid.set(uid + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: uid, role: MessageRole::User, content: trimmed.clone(),
+                thinking: String::new(), kind: MessageKind::Text,
+                timestamp: now_secs(),
+            }));
+
+            let aid = nid();
+            nid.set(aid + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: aid, role: MessageRole::Assistant, content: String::new(),
+                thinking: String::new(), kind: MessageKind::Text,
+                timestamp: now_secs(),
+            }));
+
+            msgs.with_mut(|v| {
+                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                    msg.content = "Web: remote inference not implemented yet.".to_string();
+                }
+            });
+
+            il.set(false);
+        }
+    };
+
+    let mut input_for_submit = input.clone();
+    let mut scroll_to_bottom = move || {
+        spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            let js = r#"var el = document.getElementById('message-list'); if (el) { el.scrollTop = 0; }"#;
+            let _ = dioxus::document::eval(js).await;
+        });
+        has_new.set(false);
+        at_bottom.set(true);
+    };
+
+    let on_submit = EventHandler::new(move |e: FormEvent| {
+        e.prevent_default();
+        let mut process_input = process_input;
+        let val = input_for_submit.read().trim().to_string();
+        if val.is_empty() { return; }
+        if val.starts_with('/') {
+            input_for_submit.set(String::new());
+            process_input(val);
+            return;
+        }
+        if *loading_state.read() == LoadingState::Ready {
+            input_for_submit.set(String::new());
+            process_input(val);
+            if !*at_bottom.peek() {
+                scroll_to_bottom();
+            }
+        }
+    });
 
     let current_theme = theme();
-    let msgs = messages();
+    let show_new_btn = *has_new.read();
 
     rsx! {
         document::Stylesheet { href: TAILWIND },
+        style { {markdown_css} },
         div {
-    style: format!("background: {}; color: {}; display: flex; flex-direction: column; overflow: hidden;", current_theme.bg(), current_theme.fg()),
-    class: "h-screen flex flex-col",
-    // Message list area
-    div {
-        style: "flex: 1; overflow-y: auto; min-height: 0;",
-        class: "flex-1 overflow-y-auto p-6 pt-8 space-y-3 scroll-smooth w-full max-w-[896px] mx-auto",
-                for msg in msgs.iter() {
-div {
-    key: "{msg.id}",
-    class: match msg.kind {
-        MessageKind::Request { .. } => "p-3 w-full self-start".to_string(),
-        _ => format!("p-3 rounded-lg max-w-[80%] break-words {}",
-            match msg.role { MessageRole::User => "self-end", _ => "self-start" }
-        ),
-    },
-    style: match &msg.kind {
-        MessageKind::Request { .. } => "".to_string(),
-        _ => format!("background: {}", match msg.role {
-            MessageRole::User => "#3b82f6",
-            MessageRole::Assistant => current_theme.panel(),
-            MessageRole::System => "transparent",
-        }),
-    },
-    if !msg.thinking.is_empty() {
-        pre { class: "text-sm italic opacity-80 mb-1 whitespace-pre-wrap font-inherit font-light", "{msg.thinking}" }
-    }
-    if let MessageKind::Request { request_type, tag } = &msg.kind {
-div { class: "border rounded-lg p-4 max-w-[80%]",
-    style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
-    p { class: "text-xs opacity-50 mb-1", "#{tag}" },
-    p { class: "text-sm", "[{request_type}]" },
-}
-    } else {
-        if msg.role == MessageRole::System {
-            Markdown { content: msg.content.clone() }
-        } else {
-            pre { class: "m-0 whitespace-pre-wrap font-inherit", "{msg.content}" }
-        }
-    }
-}
+            style: format!("background: {}; color: {}; display: flex; flex-direction: column; overflow: hidden;", current_theme.bg(), current_theme.fg()),
+            class: "h-screen flex flex-col",
+            MessageList {
+                messages: messages.clone(),
+                current_theme: current_theme.clone(),
+                at_bottom: at_bottom,
+                has_new: has_new,
+            },
+            if show_new_btn {
                 div {
-                    class: "h-px w-full",
-                    onmounted: move |event| {
-                        spawn(async move {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-                            let _ = event.scroll_to(dioxus::html::ScrollBehavior::Smooth).await;
-                        });
-                    },
-                }
-            }
-div {
-    class: "w-full max-w-[896px] shrink-0 p-3 border-t mx-auto",
-    style: format!("border-color: {}; background: {}", current_theme.border(), current_theme.panel()),
-    form {
-                    onsubmit: on_submit,
-                    div { class: "flex gap-2",
-                        input {
-                            r#type: "text",
-                            autofocus: true,
-                            placeholder: match loading_state() { LoadingState::Loading => "Loading…", _ => "Prompt…" },
-                            disabled: matches!(loading_state(), LoadingState::Loading),
-                            value: "{input.read()}",
-                            oninput: move |e| *input.write() = e.data.value(),
-                            class: "flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500",
-                            style: format!("background: {}; color: {}; border-color: {}", current_theme.bg(), current_theme.fg(), current_theme.border()),
-                            onmounted: move |event| {
-                                spawn(async move {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                                    let _ = event.set_focus(true).await;
-                                });
-                            },
-                        }
-                        button {
-                            r#type: "submit",
-                            disabled: is_loading() || matches!(loading_state(), LoadingState::Loading) || input.read().trim().is_empty(),
-                            class: "px-4 py-2 rounded text-white disabled:opacity-50 disabled:cursor-not-allowed",
-                            style: if is_loading() || matches!(loading_state(), LoadingState::Loading) { "background: #444;" } else { "background: #3b82f6;" },
-                            "Send"
-                        }
+                    class: "w-full max-w-[896px] mx-auto px-3 flex justify-center",
+                    button {
+                        key: "scroll-down-btn",
+                        onclick: move |_| scroll_to_bottom(),
+                        class: "px-4 py-2 rounded-full bg-blue-600 text-white text-sm font-medium shadow-lg hover:bg-blue-500 transition-colors -mt-2 mb-1",
+                        "↓ New messages"
                     }
                 }
             }
+            InputArea {
+                input: input,
+                on_submit: on_submit,
+                loading_state: loading_state,
+                theme: current_theme.clone(),
+                is_inferencing: *is_loading.read(),
+            on_stop: {
+                let mut il = is_loading.clone();
+                move |_| {
+                    #[cfg(any(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    all(target_os = "android", target_arch = "aarch64")
+))]
+                    llama::request_stop();
+                    il.set(false);
+                }
+            },
+            }
         }
     }
-}
 }

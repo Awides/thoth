@@ -19,12 +19,25 @@ pub mod bindings {
 }
 
 use self::bindings::*;
-use std::ffi::{CString, CStr};
+use std::ffi::CString;
 use std::path::Path;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static LOG_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+static ABORT: AtomicBool = AtomicBool::new(false);
+
+pub fn request_stop() {
+    ABORT.store(true, Ordering::SeqCst);
+}
+
+pub fn is_stop_requested() -> bool {
+    ABORT.load(Ordering::SeqCst)
+}
+
+fn clear_stop() {
+    ABORT.store(false, Ordering::SeqCst);
+}
 
 /// Silence llama.cpp logs (call once at startup).
 pub fn suppress_llama_logging() {
@@ -53,6 +66,7 @@ pub struct Config {
     pub temperature: f32,
     pub top_p: f32,
     pub top_k: i32,
+    pub repeat_penalty: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +89,7 @@ impl Default for Config {
             temperature: 0.7,
             top_p: 0.9,
             top_k: 40,
+            repeat_penalty: 1.5,
         }
     }
 }
@@ -120,6 +135,15 @@ impl Engine {
             }
             anyhow::bail!("Failed to create sampler chain");
         }
+        let rp = unsafe { llama_sampler_init_penalties(
+            -1,
+            config.repeat_penalty,
+            0.0,
+            1.5,
+        ) };
+        if !rp.is_null() {
+            unsafe { llama_sampler_chain_add(sampler, rp); }
+        }
         let t = unsafe { llama_sampler_init_temp(config.temperature) };
         if !t.is_null() {
             unsafe { llama_sampler_chain_add(sampler, t); }
@@ -132,9 +156,9 @@ impl Engine {
         if !t.is_null() {
             unsafe { llama_sampler_chain_add(sampler, t); }
         }
-        let t = unsafe { llama_sampler_init_greedy() };
-        if !t.is_null() {
-            unsafe { llama_sampler_chain_add(sampler, t); }
+        let dist = unsafe { llama_sampler_init_dist(42) };
+        if !dist.is_null() {
+            unsafe { llama_sampler_chain_add(sampler, dist); }
         }
         Ok(Self {
             model,
@@ -166,7 +190,7 @@ impl Engine {
     where
         F: FnMut(StreamEvent) -> Result<(), ()>,
     {
-        // Reset context to ensure stateless inference per request
+        clear_stop();
         self.reset()?;
         let cstr = CString::new(prompt)?;
         let mut tokens = vec![0i32; prompt.len() * 2];
@@ -192,21 +216,49 @@ impl Engine {
         }
         let eos = unsafe { llama_token_eos(vocab) };
         let mut output = String::new();
+        let mut in_thinking = false;
+        // Qwen3 thinking mode uses special token IDs:
+        // 151667 = <think> (open), 151668 = </think> (close)
+        // These are special tokens NOT decoded as text by llama_detokenize.
+        // We detect them by token ID directly.
+        let think_open_id: i32 = 151667;
+        let think_close_id: i32 = 151668;
         let max_new = (self.config.n_ctx as i32 - n_tokens as i32)
-            .min(256)
+            .min(2048)
             .max(1);
         for _ in 0..max_new {
+            if is_stop_requested() { break; }
             let token = unsafe { llama_sampler_sample(self.sampler, self.ctx, -1) };
-            if token == eos {
-                break;
+            if token == eos { break; }
+            // Check for Qwen3 thinking special tokens by ID
+            if token == think_open_id {
+                in_thinking = true;
+                eprintln!("[THOTH_DBG] ThinkingStart (token id={})", token);
+                if f(StreamEvent::ThinkingStart).is_err() { break; }
+                unsafe { llama_sampler_accept(self.sampler, token); }
+                let mut t = token;
+                let batch = unsafe { llama_batch_get_one(&mut t, 1) };
+                if unsafe { llama_decode(self.ctx, batch) } != 0 { break; }
+                continue;
             }
+            if token == think_close_id {
+                in_thinking = false;
+                eprintln!("[THOTH_DBG] ThinkingEnd (token id={})", token);
+                if f(StreamEvent::ThinkingEnd).is_err() { break; }
+                unsafe { llama_sampler_accept(self.sampler, token); }
+                let mut t = token;
+                let batch = unsafe { llama_batch_get_one(&mut t, 1) };
+                if unsafe { llama_decode(self.ctx, batch) } != 0 { break; }
+                continue;
+            }
+            // Regular token — detokenize and route
             let mut buf = [0u8; 32];
             let n = unsafe {
                 llama_detokenize(
                     vocab,
                     &token,
                     1,
-                    buf.as_mut_ptr() as *mut i8,
+                    buf.as_mut_ptr() as *mut _,
                     buf.len() as i32,
                     false,
                     true,
@@ -214,22 +266,10 @@ impl Engine {
             };
             if n > 0 {
                 if let Ok(s) = std::str::from_utf8(&buf[..n as usize]) {
-                    // Handle Qwen3 thinking tags: strip them but signal UI
-                    // Check token text via llama_token_get_text to get the actual vocab string
-                    let token_str = unsafe {
-                        let ptr = llama_token_get_text(vocab, token);
-                        if !ptr.is_null() {
-                            CStr::from_ptr(ptr).to_string_lossy().into_owned()
-                        } else {
-                            s.to_string()
-                        }
-                    };
-                    if token_str == "<think>" {
-                        if f(StreamEvent::ThinkingStart).is_err() {
-                            break;
-                        }
-                    } else if token_str == "</think>" {
-                        if f(StreamEvent::ThinkingEnd).is_err() {
+                    if in_thinking {
+                        // Thinking content — route to ThinkingToken event
+                        // (app still uses msg.thinking for this)
+                        if f(StreamEvent::Token(s.to_string())).is_err() {
                             break;
                         }
                     } else {
@@ -243,9 +283,11 @@ impl Engine {
             unsafe { llama_sampler_accept(self.sampler, token); }
             let mut t = token;
             let batch = unsafe { llama_batch_get_one(&mut t, 1) };
-            if unsafe { llama_decode(self.ctx, batch) } != 0 {
-                break;
-            }
+            if unsafe { llama_decode(self.ctx, batch) } != 0 { break; }
+        }
+        // If still in thinking at end, emit ThinkingEnd so UI resets
+        if in_thinking {
+            let _ = f(StreamEvent::ThinkingEnd);
         }
         let _ = f(StreamEvent::Done(output));
         Ok(())

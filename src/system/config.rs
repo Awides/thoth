@@ -8,10 +8,12 @@ use std::fs;
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
-    /// User's nostr public key (hex)
+    /// User's nostr public key (bech32)
     pub nostr_public_key: Option<String>,
-    /// Encrypted nostr secret key (or stored in system keyring)
-    pub nostr_secret_key_encrypted: Option<String>,
+    /// Derived nostr secret key (hex)
+    pub nostr_secret_key_hex: Option<String>,
+    /// BIP39 mnemonic (backup phrase) – in production this must be encrypted at rest
+    pub mnemonic_encrypted: Option<String>,
     /// Device name
     pub device_name: Option<String>,
     /// Whether onboarding has been completed
@@ -71,20 +73,20 @@ impl AppConfig {
 
 /// Check if onboarding is needed
 pub fn needs_onboarding() -> bool {
-    match AppConfig::default_path() {
-        Ok(path) => {
-            match AppConfig::load(&path) {
+    match get_config_path().exists() {
+        false => true,
+        true => {
+            match AppConfig::load(&get_config_path()) {
                 Ok(config) => !config.has_keys(),
-                Err(_) => true, // If we can't load config, assume onboarding needed
+                Err(_) => true,
             }
         }
-        Err(_) => true, // If we can't get config path, assume onboarding needed
     }
 }
 
-/// Mark onboarding as completed
+/// Mark onboarding as completed (legacy)
 pub fn complete_onboarding(public_key: &str) -> Result<()> {
-    let path = AppConfig::default_path()?;
+    let path = get_config_path();
     let mut config = AppConfig::load(&path).unwrap_or_default();
     
     config.nostr_public_key = Some(public_key.to_string());
@@ -113,6 +115,20 @@ mod tests {
         
         assert_eq!(loaded.nostr_public_key, Some("test_key".to_string()));
         assert!(loaded.onboarding_completed);
+    }
+}
+
+/// Get the config file path for the current platform
+pub fn get_config_path() -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        // On Android, use app‑private files directory
+        PathBuf::from("/data/data/com.example.Thoth/files/config.toml")
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let dirs = directories::BaseDirs::new().expect("no home directory");
+        dirs.config_dir().join("thoth").join("config.toml")
     }
 }
 
