@@ -3,5 +3,6 @@ target/*
 lib/*
 src/android/assets/models/
 assets/models/
+assets/fonts/
 *.log
 

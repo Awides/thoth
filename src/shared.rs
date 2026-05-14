@@ -1,4 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_MSG_ID: AtomicU64 = AtomicU64::new(100_000);
+
+pub fn next_msg_id() -> u64 {
+    NEXT_MSG_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 pub fn now_secs() -> u64 {
     SystemTime::now()
@@ -14,6 +21,7 @@ pub enum MessageRole { User, Assistant, System }
 pub enum MessageKind {
     Text,
     Request { request_type: String, tag: String },
+    ToolCall { tool_name: String },
 }
 
 #[derive(Clone, PartialEq)]

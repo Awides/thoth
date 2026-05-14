@@ -20,7 +20,7 @@ use crate::net::message::Message as NetMessage;
 use crate::system::dialog::{DialogManager, DialogType, DialogResponse};
 
 /// Parsed command
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Command {
     // Identity
     New,

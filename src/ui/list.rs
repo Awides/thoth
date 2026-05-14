@@ -61,10 +61,12 @@ pub fn MessageList(
         div {
             id: "message-list",
             class: "flex-1 overflow-y-auto p-6 pt-8 w-full flex flex-col-reverse",
+            style: "flex: 1 1 0%; overflow-y: auto; width: 100%; display: flex; flex-direction: column-reverse; padding: 1.5rem; padding-top: 2rem; min-height: 0;",
             onscroll: on_scroll,
             div {
                 key: "inner",
                 class: "flex flex-col space-y-3 w-full max-w-[896px] mx-auto my-auto",
+                style: "display: flex; flex-direction: column; width: 100%; max-width: 896px; margin-left: auto; margin-right: auto; margin-top: auto; margin-bottom: auto;",
                 for msg in items {
                     MessageBubble {
                         key: "{msg.id}",

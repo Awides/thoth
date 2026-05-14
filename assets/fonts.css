@@ -1,0 +1,224 @@
+@font-face {
+  font-family: 'MsgSans';
+  font-style: normal;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-Thin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSans';
+  font-style: oblique;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-ThinOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSans';
+  font-style: normal;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-ExtraLight.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSans';
+  font-style: oblique;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-ExtraLightOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSans';
+  font-style: oblique;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-Oblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSans';
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-Heavy.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSans';
+  font-style: oblique;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/MsgSans-HeavyOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: normal;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-Thin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: oblique;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-ThinOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: normal;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-ExtraLight.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: oblique;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-ExtraLightOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: oblique;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-Oblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-Heavy.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MsgSlab';
+  font-style: oblique;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/MsgSlab-HeavyOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: normal;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-Thin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: oblique;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-ThinOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: normal;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-ExtraLight.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: oblique;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-ExtraLightOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: oblique;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-Oblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-Heavy.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSans';
+  font-style: oblique;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/SystemSans-HeavyOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: normal;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-Thin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: oblique;
+  font-weight: 100;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-ThinOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: normal;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-ExtraLight.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: oblique;
+  font-weight: 200;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-ExtraLightOblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: oblique;
+  font-weight: 400;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-Oblique.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-Heavy.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'SystemSlab';
+  font-style: oblique;
+  font-weight: 900;
+  font-display: block;
+  src: url('/assets/fonts/SystemSlab-HeavyOblique.woff2') format('woff2');
+}

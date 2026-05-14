@@ -144,29 +144,11 @@ pub fn complete_onboarding_full(
     // 2. Initialize key storage
     let key_storage = crate::key_storage::KeyStorage::new()?;
     
-    // 3. Log onboarding events to memvid (if handle provided)
-    if let Some(handle) = mem_handle {
-        use crate::mem::{log_onboarding_event, OnboardingEvent};
-        
-        let timestamp = chrono::Utc::now().to_rfc3339();
-        
-        // Log identity creation
-        log_onboarding_event(handle, OnboardingEvent::IdentityCreated {
-            timestamp: timestamp.clone(),
-            device_name: device_name.to_string(),
-        });
-        
-        // Log device registration
-        log_onboarding_event(handle, OnboardingEvent::DeviceRegistered {
-            pubkey: public_key.to_string(),
-            timestamp: timestamp.clone(),
-        });
-        
-        // Log completion
-        log_onboarding_event(handle, OnboardingEvent::OnboardingCompleted {
-            timestamp,
-        });
-    }
+        // 3. Log onboarding events to memvid (if handle provided) - TODO: re-enable with new schema
+        if let Some(_handle) = mem_handle {
+            // use crate::mem::{log_onboarding_event, OnboardingEvent};
+            // log_onboarding_event(handle, OnboardingEvent::IdentityCreated { ... });
+        }
     
     Ok(())
 }
