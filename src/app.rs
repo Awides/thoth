@@ -411,6 +411,7 @@ target_os = "android"
         };
         msgs.with_mut(|v| v.push(welcome.clone()));
         memh.read().clone().append_snapshot(ConversationSnapshot { next_id: msg_id + 1, messages: vec![ChatMessage::from_shared(&welcome)], facts: Vec::new() });
+        let _ = memh.read().clone().compact();
         facts_sig.set(Vec::new());
         return;
     }
