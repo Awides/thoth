@@ -13,9 +13,9 @@ fn sender_label(role: MessageRole) -> &'static str {
 #[component]
 pub fn MessageBubble(msg: Message, theme: Theme, show_thinking: bool) -> Element {
     let role = msg.role;
-    let muted = theme.muted();
     let time_str = msg.timestamp_str();
     let label = sender_label(role);
+    let muted_class = theme.muted();
 
     rsx! {
         div {
@@ -23,11 +23,9 @@ pub fn MessageBubble(msg: Message, theme: Theme, show_thinking: bool) -> Element
                 MessageRole::System => "p-3 rounded-lg break-words self-start",
                 _ => "p-3 rounded-lg max-w-[80%] break-words self-start",
             },
-            p { class: "m-0 text-xs font-thin mb-1", style: format!("color: {}", muted),
-                {time_str}{"  "}{label}
-            }
+            p { class: "m-0 text-xs font-thin mb-1 {muted_class}", {time_str}{" "}{label} }
             if let MessageKind::ToolCall { tool_name } = &msg.kind {
-                p { class: "m-0 italic", style: format!("color: {}", muted),
+                p { class: "m-0 italic {muted_class}",
                     {"calling "}{tool_name.clone()}{"..."}
                 }
             } else if let MessageKind::Text = msg.kind {

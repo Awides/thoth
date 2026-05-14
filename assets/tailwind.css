@@ -10,6 +10,7 @@
     --color-blue-500: oklch(62.3% 0.214 259.815);
     --color-blue-600: oklch(54.6% 0.245 262.881);
     --color-gray-500: oklch(55.1% 0.027 264.364);
+    --color-neutral-300: oklch(87% 0 0);
     --color-white: #fff;
     --spacing: 0.25rem;
     --text-xs: 0.75rem;
@@ -431,7 +432,13 @@
   .text-gray-500 {
     color: var(--color-gray-500);
   }
-  .text-white {
+.text-neutral-300 {
+  color: var(--color-neutral-300);
+}
+.text-neutral-900 {
+  color: var(--color-neutral-900);
+}
+.text-white {
     color: var(--color-white);
   }
   .lowercase {
