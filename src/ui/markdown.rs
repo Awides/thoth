@@ -8,7 +8,6 @@ pub fn Markdown(content: String) -> Element {
         div {
             class: "markdown-content",
             dangerous_inner_html: html,
-            style: "font-family: 'MsgSans', sans-serif; font-size: 1rem; line-height: 1.75;",
         }
     }
 }

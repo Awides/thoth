@@ -20,6 +20,7 @@ use nostr_sdk::{Keys, ToBech32};
 
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
 const FONTS_CSS: &str = include_str!("../assets/fonts.css");
+const APP_CSS: &str = include_str!("../assets/app.css");
 
 #[cfg(target_os = "android")]
 const ANDROID_MODEL_DATA: &[u8] = include_bytes!("android/assets/models/Bonsai-1.7B-Q1_0.gguf");
@@ -845,6 +846,7 @@ target_os = "android"
     rsx! {
         style { {TAILWIND_CSS} },
         style { {FONTS_CSS} },
+        style { {APP_CSS} },
         style { "html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: {current_theme.bg()}; color: {current_theme.fg()}; font-family: 'MsgSans', sans-serif; }}" },
         div {
             class: "font-loading flex flex-col fixed inset-0 overflow-hidden",
