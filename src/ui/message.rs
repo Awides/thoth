@@ -23,7 +23,7 @@ pub fn MessageBubble(msg: Message, theme: Theme, show_thinking: bool) -> Element
                 MessageRole::System => "p-3 rounded-lg break-words self-start",
                 _ => "p-3 rounded-lg max-w-[80%] break-words self-start",
             },
-            p { class: "m-0 text-xs font-thin mb-1 {muted_class}", {time_str}{" "}{label} }
+            p { class: "m-0 text-xs font-extralight mb-1 {muted_class}", {time_str}{" "}{label} }
             if let MessageKind::ToolCall { tool_name } = &msg.kind {
                 p { class: "m-0 italic {muted_class}",
                     {"calling "}{tool_name.clone()}{"..."}

@@ -20,6 +20,7 @@
     --text-lg: 1.125rem;
     --text-lg--line-height: calc(1.75 / 1.125);
     --font-weight-thin: 100;
+    --font-weight-extralight: 200;
     --font-weight-light: 300;
     --font-weight-medium: 500;
     --radius-lg: 0.5rem;
@@ -408,6 +409,10 @@
     font-size: var(--text-xs);
     line-height: var(--tw-leading, var(--text-xs--line-height));
   }
+  .font-extralight {
+    --tw-font-weight: var(--font-weight-extralight);
+    font-weight: var(--font-weight-extralight);
+  }
   .font-light {
     --tw-font-weight: var(--font-weight-light);
     font-weight: var(--font-weight-light);
@@ -416,11 +421,15 @@
     --tw-font-weight: var(--font-weight-medium);
     font-weight: var(--font-weight-medium);
   }
-  .font-thin {
-    --tw-font-weight: var(--font-weight-thin);
-    font-weight: var(--font-weight-thin);
-  }
-  .break-words {
+.font-thin {
+  --tw-font-weight: var(--font-weight-thin);
+  font-weight: var(--font-weight-thin);
+}
+.font-extralight {
+  --tw-font-weight: var(--font-weight-extralight);
+  font-weight: var(--font-weight-extralight);
+}
+.break-words {
     overflow-wrap: break-word;
   }
   .whitespace-pre-wrap {
@@ -432,13 +441,10 @@
   .text-gray-500 {
     color: var(--color-gray-500);
   }
-.text-neutral-300 {
-  color: var(--color-neutral-300);
-}
-.text-neutral-900 {
-  color: var(--color-neutral-900);
-}
-.text-white {
+  .text-neutral-300 {
+    color: var(--color-neutral-300);
+  }
+  .text-white {
     color: var(--color-white);
   }
   .lowercase {
