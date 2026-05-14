@@ -58,5 +58,5 @@ impl Theme {
     pub fn fg(&self) -> &'static str { match self { Theme::Light => "#171717", Theme::Dark => "#ededed" } }
     pub fn panel(&self) -> &'static str { match self { Theme::Light => "#f0f0f0", Theme::Dark => "#1a1a1a" } }
     pub fn border(&self) -> &'static str { match self { Theme::Light => "#e5e5e5", Theme::Dark => "#262626" } }
-    pub fn muted(&self) -> &'static str { match self { Theme::Light => "#a3a3a3", Theme::Dark => "#525252" } }
+    pub fn muted(&self) -> &'static str { match self { Theme::Light => "#a3a3a3", Theme::Dark => "#737373" } }
 }
