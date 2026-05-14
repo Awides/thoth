@@ -672,35 +672,42 @@ target_os = "android"
                     });
                 }
 
-                match llama::infer_stream(&h_tool, segs_for_reinfer) {
-                    Ok((mut rx2, _)) => {
-                    let mut in_thinking2 = false;
-                    #[allow(unused_assignments)]
-                    let mut full_output2 = String::new();
-                    while let Some(event) = rx2.recv().await {
-                            match event {
-                                llama::StreamEvent::ThinkingStart => { in_thinking2 = true; }
-                                llama::StreamEvent::ThinkingEnd => { in_thinking2 = false; }
-                                llama::StreamEvent::ToolCallBegin | llama::StreamEvent::ToolCallEnd => {}
-                                llama::StreamEvent::Token(token) => {
-                                    ms.with_mut(|v| {
-                                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid2) {
-                                            if in_thinking2 { msg.thinking.push_str(&token); }
-                                            else { msg.content.push_str(&token); }
-                                        }
-                                    });
+        match llama::infer_stream(&h_tool, segs_for_reinfer) {
+            Ok((mut rx2, _)) => {
+                let mut in_thinking2 = false;
+                let mut full_output2 = String::new();
+                while let Some(event) = rx2.recv().await {
+                    match event {
+                        llama::StreamEvent::ThinkingStart => { in_thinking2 = true; }
+                        llama::StreamEvent::ThinkingEnd => { in_thinking2 = false; }
+                        llama::StreamEvent::ToolCallBegin | llama::StreamEvent::ToolCallEnd => {}
+                        llama::StreamEvent::Token(token) => {
+                            ms.with_mut(|v| {
+                                if let Some(msg) = v.iter_mut().find(|m| m.id == aid2) {
+                                    if in_thinking2 { msg.thinking.push_str(&token); }
+                                    else { msg.content.push_str(&token); }
                                 }
-                                llama::StreamEvent::Done(output2) => { full_output2 = output2; }
-                    llama::StreamEvent::Error(e) => {
-                        ms.with_mut(|v| {
-                            if let Some(msg) = v.iter_mut().find(|m| m.id == aid2) {
-                                msg.content = format!("Error: {}", e);
-                            }
-                        });
-                        break;
+                            });
+                        }
+                        llama::StreamEvent::Done(output2) => { full_output2 = output2; }
+                        llama::StreamEvent::Error(e) => {
+                            ms.with_mut(|v| {
+                                if let Some(msg) = v.iter_mut().find(|m| m.id == aid2) {
+                                    msg.content = format!("Error: {}", e);
+                                }
+                            });
+                            break;
+                        }
                     }
                 }
-            }
+                let parsed2 = parse_tool_calls(&full_output2);
+                if !parsed2.tool_calls.is_empty() {
+                    ms.with_mut(|v| {
+                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid2) {
+                            msg.content = if parsed2.text.is_empty() { String::new() } else { parsed2.text.clone() };
+                        }
+                    });
+                }
             let reinf_content = ms.read().iter().find(|m| m.id == aid2).map(|m| m.content.clone()).unwrap_or_default();
             if reinf_content.trim().is_empty() {
                             let fallback = tool_results.iter().map(|r| format!("{}: {}", r.name, r.content)).collect::<Vec<_>>().join("\n");
@@ -838,10 +845,10 @@ target_os = "android"
     rsx! {
         style { {TAILWIND_CSS} },
         style { {FONTS_CSS} },
-        style { "html {{ margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: {current_theme.bg()}; color: {current_theme.fg()}; font-family: 'MsgSans', sans-serif; }} body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: {current_theme.bg()}; color: {current_theme.fg()}; font-family: 'MsgSans', sans-serif; }}" },
+        style { "html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: {current_theme.bg()}; color: {current_theme.fg()}; font-family: 'MsgSans', sans-serif; }}" },
         div {
-            class: "font-loading flex flex-col",
-            style: format!("background: {}; color: {}; display: flex; flex-direction: column; overflow: hidden; position: fixed; top: 0; left: 0; right: 0; bottom: 0;", current_theme.bg(), current_theme.fg()),
+            class: "font-loading flex flex-col fixed inset-0 overflow-hidden",
+            style: format!("background: {}; color: {}", current_theme.bg(), current_theme.fg()),
             MessageList {
                 messages: messages.clone(),
                 current_theme: current_theme.clone(),
@@ -849,17 +856,15 @@ target_os = "android"
                 has_new: has_new,
             },
         if show_new_btn {
-            div {
-                class: "w-full max-w-[896px] mx-auto px-3 flex justify-center",
-                style: "width: 100%; max-width: 896px; margin-left: auto; margin-right: auto; padding-left: 0.75rem; padding-right: 0.75rem; display: flex; justify-content: center;",
-                button {
-                    key: "scroll-down-btn",
-                    onclick: move |_| scroll_to_bottom(),
-                    class: "px-4 py-2 rounded-full bg-blue-600 text-white text-sm font-medium shadow-lg hover:bg-blue-500 transition-colors -mt-2 mb-1",
-                    style: "padding: 0.5rem 1rem; border-radius: 9999px; background: oklch(54.6% 0.245 262.881); color: #fff; font-size: 0.875rem; font-weight: 500; box-shadow: 0 10px 15px -3px rgba(0,0,0,.1); margin-top: -0.5rem; margin-bottom: 0.25rem; border: none; cursor: pointer;",
-                    "↓ New messages"
+                div {
+                    class: "w-full max-w-[896px] mx-auto px-3 flex justify-center",
+                    button {
+                        key: "scroll-down-btn",
+                        onclick: move |_| scroll_to_bottom(),
+                        class: "px-4 py-2 rounded-full bg-blue-600 text-white text-sm font-medium shadow-lg hover:bg-blue-500 transition-colors -mt-2 mb-1",
+                        "↓ New messages"
+                    }
                 }
-            }
         }
             InputArea {
                 input: input,
