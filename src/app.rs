@@ -48,6 +48,77 @@ fn ensure_android_model_extracted() -> Option<String> {
     None
 }
 
+fn detect_language() -> String {
+    #[cfg(target_os = "android")]
+    {
+        let locale = std::env::var("LANG")
+            .or_else(|_| std::env::var("LC_ALL"))
+            .or_else(|_| std::env::var("LC_MESSAGES"))
+            .unwrap_or_else(|_| "en_US.UTF-8".to_string());
+        locale.split('.').next().unwrap_or("en_US").to_string()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        std::env::var("LC_ALL")
+            .or_else(|_| std::env::var("LC_MESSAGES"))
+            .or_else(|_| std::env::var("LANG"))
+            .unwrap_or_else(|_| "en_US.UTF-8".to_string())
+            .split('.')
+            .next()
+            .unwrap_or("en_US")
+            .to_string()
+    }
+}
+
+fn default_system_prompt(lang: &str) -> String {
+    let greet_instruction = if lang.starts_with("en") {
+        "Greet the user in English."
+    } else if lang.starts_with("es") {
+        "Greet the user in Spanish."
+    } else if lang.starts_with("fr") {
+        "Greet the user in French."
+    } else if lang.starts_with("de") {
+        "Greet the user in German."
+    } else if lang.starts_with("pt") {
+        "Greet the user in Portuguese."
+    } else if lang.starts_with("ja") {
+        "Greet the user in Japanese."
+    } else if lang.starts_with("zh") {
+        "Greet the user in Chinese."
+    } else if lang.starts_with("ko") {
+        "Greet the user in Korean."
+    } else if lang.starts_with("ru") {
+        "Greet the user in Russian."
+    } else if lang.starts_with("ar") {
+        "Greet the user in Arabic."
+    } else if lang.starts_with("hi") {
+        "Greet the user in Hindi."
+    } else if lang.starts_with("it") {
+        "Greet the user in Italian."
+    } else if lang.starts_with("nl") {
+        "Greet the user in Dutch."
+    } else if lang.starts_with("pl") {
+        "Greet the user in Polish."
+    } else if lang.starts_with("tr") {
+        "Greet the user in Turkish."
+    } else if lang.starts_with("vi") {
+        "Greet the user in Vietnamese."
+    } else if lang.starts_with("th") {
+        "Greet the user in Thai."
+    } else {
+        "Greet the user in their language."
+    };
+    format!("You are Tot, a helpful and concise AI assistant. You respond in the user's language. {greet_instruction} Be friendly but brief. You can use the provided tools when helpful.")
+}
+
+fn splash_content(is_new_user: bool) -> String {
+    if is_new_user {
+        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode".to_string()
+    } else {
+        "# *THOTH▷*".to_string()
+    }
+}
+
 pub fn App() -> Element {
     let theme = use_signal_sync(|| Theme::Dark);
     let messages = use_signal_sync(|| Vec::<Message>::new());
@@ -58,7 +129,10 @@ pub fn App() -> Element {
     let mut at_bottom = use_signal(|| true);
     let mut has_new = use_signal(|| false);
     let facts = use_signal_sync(|| Vec::<MemoryFact>::new());
-    let mut system_prompt = use_signal_sync(|| "You are a helpful assistant.".to_string());
+    let mut system_prompt = use_signal_sync(|| {
+        let lang = detect_language();
+        default_system_prompt(&lang)
+    });
 
     #[cfg(any(
 all(not(target_arch = "wasm32"), not(target_os = "android")),
@@ -202,17 +276,18 @@ target_os = "android"
                 if !snap.facts.is_empty() {
                     facts_sig.set(snap.facts.clone());
                 }
-                if snap.messages.is_empty() {
-                            let current_id = nid();
-                            nid.set(current_id + 1);
-                            msgs.with_mut(|v| v.push(Message {
-                                id: current_id,
-                                role: MessageRole::System,
-                                content: "# *THOTH▷*".to_string(),
-                                thinking: String::new(),
-                                kind: MessageKind::Text,
-                                timestamp: now_secs(),
-                            }));
+                    if snap.messages.is_empty() {
+                        let is_new = config::needs_onboarding();
+                        let current_id = nid();
+                        nid.set(current_id + 1);
+                        msgs.with_mut(|v| v.push(Message {
+                            id: current_id,
+                            role: MessageRole::System,
+                            content: splash_content(is_new),
+                            thinking: String::new(),
+                            kind: MessageKind::Text,
+                            timestamp: now_secs(),
+                        }));
                         } else {
                             for cm in &snap.messages {
                                 msgs.with_mut(|v| v.push(cm.to_shared()));
@@ -222,30 +297,32 @@ target_os = "android"
                             }
                         }
                     }
-                    Err(_) => {
-                        let current_id = nid();
-                        nid.set(current_id + 1);
-                        msgs.with_mut(|v| v.push(Message {
-                            id: current_id,
-                            role: MessageRole::System,
-                            content: "# *THOTH▷*".to_string(),
-                            thinking: String::new(),
-                            kind: MessageKind::Text,
-                            timestamp: now_secs(),
-                        }));
-                    }
+                Err(_) => {
+                    let is_new = config::needs_onboarding();
+                    let current_id = nid();
+                    nid.set(current_id + 1);
+                    msgs.with_mut(|v| v.push(Message {
+                        id: current_id,
+                        role: MessageRole::System,
+                        content: splash_content(is_new),
+                        thinking: String::new(),
+                        kind: MessageKind::Text,
+                        timestamp: now_secs(),
+                    }));
                 }
-            } else {
-                let current_id = nid();
-                nid.set(current_id + 1);
-                msgs.with_mut(|v| v.push(Message {
-                    id: current_id,
-                    role: MessageRole::System,
-                    content: "# *THOTH▷*".to_string(),
-                    thinking: String::new(),
-                    kind: MessageKind::Text,
-                    timestamp: now_secs(),
-                }));
+            }
+        } else {
+            let is_new = config::needs_onboarding();
+            let current_id = nid();
+            nid.set(current_id + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: current_id,
+                role: MessageRole::System,
+                content: splash_content(is_new),
+                thinking: String::new(),
+                kind: MessageKind::Text,
+                timestamp: now_secs(),
+            }));
             }
         }
                 Err(e) => {
@@ -298,7 +375,7 @@ target_os = "android"
                     thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
                 }));
             } else if rest == "reset" {
-                system_prompt_sig.set("You are a helpful assistant.".to_string());
+                system_prompt_sig.set(default_system_prompt(&detect_language()));
                 let msg_id = nid();
                 nid.set(msg_id + 1);
                 let _ = msgs.with_mut(|v| v.push(Message {
@@ -327,7 +404,7 @@ target_os = "android"
         let welcome = Message {
             id: msg_id,
             role: MessageRole::System,
-            content: "# *THOTH▷*".to_string(),
+            content: splash_content(false),
             thinking: String::new(),
             kind: MessageKind::Text,
             timestamp: now_secs(),
