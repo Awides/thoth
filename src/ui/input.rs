@@ -12,8 +12,7 @@ pub fn InputArea(
 ) -> Element {
     rsx! {
         div {
-            class: "w-full shrink-0 p-3 border-t",
-            style: format!("border-top-color: {}", theme.border()),
+            class: "w-full shrink-0 p-3",
             form {
                 onsubmit: on_submit,
                 div { class: "flex gap-2 max-w-[896px] mx-auto",
