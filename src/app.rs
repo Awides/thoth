@@ -21,6 +21,7 @@ use nostr_sdk::{Keys, ToBech32};
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
 const FONTS_CSS: &str = include_str!("../assets/fonts.css");
 const APP_CSS: &str = include_str!("../assets/app.css");
+const PLASMA_JS: &str = include_str!("../assets/plasma.js");
 
 #[cfg(target_os = "android")]
 const ANDROID_MODEL_DATA: &[u8] = include_bytes!("android/assets/models/Bonsai-1.7B-Q1_0.gguf");
@@ -113,10 +114,18 @@ fn default_system_prompt(lang: &str) -> String {
 
 fn splash_content(is_new_user: bool) -> String {
     if is_new_user {
-        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode".to_string()
+        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode\n- `/plasma` — configure background shader\n- `/blend` — set text blend mode over shader".to_string()
     } else {
         "# *THOTH▷*".to_string()
     }
+}
+
+fn save_plasma_config(sig: &dioxus::prelude::Signal<config::PlasmaConfig, dioxus::prelude::SyncStorage>) {
+    let pc = sig.read().clone();
+    let path = config::get_config_path();
+    let mut cfg = config::AppConfig::load(&path).unwrap_or_default();
+    cfg.plasma = pc;
+    let _ = cfg.save(&path);
 }
 
 pub fn App() -> Element {
@@ -132,6 +141,11 @@ pub fn App() -> Element {
     let mut system_prompt = use_signal_sync(|| {
         let lang = detect_language();
         default_system_prompt(&lang)
+    });
+    let mut plasma_config = use_signal_sync(|| {
+        config::AppConfig::load(&config::get_config_path())
+            .map(|c| c.plasma.clone())
+            .unwrap_or_default()
     });
 
     #[cfg(any(
@@ -338,33 +352,162 @@ target_os = "android"
 all(not(target_arch = "wasm32"), not(target_os = "android")),
 target_os = "android"
 ))]
-    let mut process_input = {
+let mut process_input = {
     let handle = handle.clone();
     let msgs = messages.clone();
     let nid = next_id.clone();
     let il = is_loading.clone();
-        let t = theme.clone();
-        let memh = mem_handle.clone();
-        let facts_sig = facts.clone();
-        let tool_engine_c = tool_engine.clone();
-        let sp = system_prompt.clone();
-        move |input: String| {
-            let mut msgs = msgs;
-            let mut nid = nid;
-            let mut il = il;
-            let mut t = t;
-            let memh = memh;
-            let mut facts_sig = facts_sig;
-            let tool_engine = tool_engine_c;
+    let t = theme.clone();
+    let memh = mem_handle.clone();
+    let facts_sig = facts.clone();
+    let tool_engine_c = tool_engine.clone();
+    let sp = system_prompt.clone();
+    let pc = plasma_config.clone();
+    move |input: String| {
+        let mut msgs = msgs;
+        let mut nid = nid;
+        let mut il = il;
+        let mut t = t;
+        let memh = memh;
+        let mut facts_sig = facts_sig;
+        let tool_engine = tool_engine_c;
+        let mut plasma_cfg = pc;
             let mut system_prompt_sig = sp;
+        let mut plasma_cfg = plasma_cfg;
         let trimmed = input.trim().to_string();
             if trimmed.is_empty() { return; }
 
         if trimmed.starts_with("/theme") { t.set(t().toggle()); return; }
         if trimmed.starts_with("/light") { t.set(Theme::Light); return; }
         if trimmed.starts_with("/dark") { t.set(Theme::Dark); return; }
+        if trimmed.starts_with("/plasma") {
+            let rest = trimmed["/plasma".len()..].trim();
+            if rest.is_empty() || rest == "show" {
+                let pc = plasma_cfg.read().clone();
+                let dc = &pc.dark_colors;
+                let lc = &pc.light_colors;
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: format!(
+                        "**Plasma shader:**\n- enabled: {}\n- speed: {}\n- dark colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n- light colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n\nUsage: `/plasma on|off` · `/plasma speed <0.1-5.0>` · `/plasma reset`",
+                        pc.enabled, pc.speed,
+                        dc[0],dc[1],dc[2], dc[3],dc[4],dc[5], dc[6],dc[7],dc[8],
+                        lc[0],lc[1],lc[2], lc[3],lc[4],lc[5], lc[6],lc[7],lc[8],
+                    ),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            } else if rest == "on" {
+                plasma_cfg.with_mut(|p| p.enabled = true);
+                save_plasma_config(&plasma_cfg);
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: "Plasma enabled.".to_string(),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            } else if rest == "off" {
+                plasma_cfg.with_mut(|p| p.enabled = false);
+                save_plasma_config(&plasma_cfg);
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: "Plasma disabled.".to_string(),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            } else if rest.starts_with("speed") {
+                let val: Result<f32, _> = rest["speed".len()..].trim().parse();
+                match val {
+                    Ok(s) if s >= 0.1 && s <= 5.0 => {
+                        plasma_cfg.with_mut(|p| p.speed = s);
+                        save_plasma_config(&plasma_cfg);
+                        let msg_id = nid();
+                        nid.set(msg_id + 1);
+                        let _ = msgs.with_mut(|v| v.push(Message {
+                            id: msg_id, role: MessageRole::System,
+                            content: format!("Plasma speed set to {:.1}.", s),
+                            thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                        }));
+                    }
+                    _ => {
+                        let msg_id = nid();
+                        nid.set(msg_id + 1);
+                        let _ = msgs.with_mut(|v| v.push(Message {
+                            id: msg_id, role: MessageRole::System,
+                            content: "Usage: `/plasma speed <0.1-5.0>`".to_string(),
+                            thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                        }));
+                    }
+                }
+            } else if rest == "reset" {
+                plasma_cfg.set(config::PlasmaConfig::default());
+                save_plasma_config(&plasma_cfg);
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: "Plasma config reset to defaults.".to_string(),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            }
+            return;
+        }
+        if trimmed.starts_with("/blend") {
+            let rest = trimmed["/blend".len()..].trim();
+            let is_dark = t() == Theme::Dark;
+            let theme_label = if is_dark { "dark" } else { "light" };
+            if rest.is_empty() || rest == "show" {
+                let pc = plasma_cfg.read().clone();
+                let current = if is_dark { &pc.dark_blend } else { &pc.light_blend };
+                let modes = config::BLEND_MODES.join(" · ");
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: format!("**Blend mode ({theme_label}):** `{current}`\n**Dark:** `{}` · **Light:** `{}`\n\nAvailable:\n{modes}\n\nUsage: `/blend <mode>` — sets for current theme\n`/blend reset` — reset current theme to default", pc.dark_blend, pc.light_blend),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            } else if rest == "reset" {
+                let default = if is_dark { config::default_dark_blend() } else { config::default_light_blend() };
+                plasma_cfg.with_mut(|p| {
+                    if is_dark { p.dark_blend = default.clone(); } else { p.light_blend = default.clone(); }
+                });
+                save_plasma_config(&plasma_cfg);
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: format!("Blend mode ({theme_label}) reset to `{default}`."),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            } else if config::BLEND_MODES.contains(&rest) {
+                plasma_cfg.with_mut(|p| {
+                    if is_dark { p.dark_blend = rest.to_string(); } else { p.light_blend = rest.to_string(); }
+                });
+                save_plasma_config(&plasma_cfg);
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: format!("Blend mode ({theme_label}) set to `{rest}`."),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            } else {
+                let msg_id = nid();
+                nid.set(msg_id + 1);
+                let _ = msgs.with_mut(|v| v.push(Message {
+                    id: msg_id, role: MessageRole::System,
+                    content: format!("Unknown blend mode `{rest}`. Type `/blend` to see available modes."),
+                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                }));
+            }
+            return;
+        }
         if trimmed.starts_with("/system") {
-            let rest = trimmed["/system".len()..].trim();
+        let rest = trimmed["/system".len()..].trim();
             if rest.is_empty() || rest == "show" {
                 let current = system_prompt_sig.read().clone();
                 let msg_id = nid();
@@ -921,50 +1064,79 @@ target_os = "android"
         dioxus::document::eval("document.fonts.ready.then(function(){var el=document.querySelector('.font-loading');if(el){el.classList.replace('font-loading','font-ready');}})").await;
     });
 
-    rsx! {
+    use_future(move || async move {
+        dioxus::document::eval(PLASMA_JS).await;
+    });
+
+    {
+        let pc = plasma_config.read().clone();
+        let is_dark = current_theme == Theme::Dark;
+        let colors = if is_dark { &pc.dark_colors } else { &pc.light_colors };
+        let js = format!(
+            "if(window.__plasmaUpdate)window.__plasmaUpdate({{enabled:{},speed:{},c1:[{},{},{}],c2:[{},{},{}],c3:[{},{},{}]}});",
+            pc.enabled, pc.speed,
+            colors[0], colors[1], colors[2],
+            colors[3], colors[4], colors[5],
+            colors[6], colors[7], colors[8],
+        );
+        spawn(async move {
+            dioxus::document::eval(&js).await;
+        });
+    }
+
+        rsx! {
         style { {TAILWIND_CSS} },
         style { {FONTS_CSS} },
         style { {APP_CSS} },
-        style { "html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: {current_theme.bg()}; color: {current_theme.fg()}; font-family: 'MsgSans', sans-serif; }}" },
+        style { "html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; color: {current_theme.fg()}; font-family: 'MsgSans', sans-serif; }}" },
         div {
             class: "font-loading flex flex-col fixed inset-0 overflow-hidden",
-            style: format!("background: {}; color: {}", current_theme.bg(), current_theme.fg()),
-            MessageList {
-                messages: messages.clone(),
-                current_theme: current_theme.clone(),
-                at_bottom: at_bottom,
-                has_new: has_new,
+            style: format!("color: {}", current_theme.fg()),
+            canvas {
+                id: "plasma-canvas",
+                class: "absolute top-0 left-0 w-full h-full pointer-events-none",
+                style: "z-index: 0;",
             },
-        if show_new_btn {
-                div {
-                    class: "w-full max-w-[896px] mx-auto px-3 flex justify-center",
-                    button {
-                        key: "scroll-down-btn",
-                        onclick: move |_| scroll_to_bottom(),
-                        class: "px-4 py-2 rounded-full bg-blue-600 text-white text-sm font-medium shadow-lg hover:bg-blue-500 transition-colors -mt-2 mb-1",
-                        "↓ New messages"
+            div {
+                class: "relative flex flex-col flex-1 min-h-0",
+                style: format!("z-index: 1; mix-blend-mode: {};", if current_theme == Theme::Dark { plasma_config.read().dark_blend.clone() } else { plasma_config.read().light_blend.clone() }),
+                MessageList {
+                    messages: messages.clone(),
+                    current_theme: current_theme.clone(),
+                    at_bottom: at_bottom,
+                    has_new: has_new,
+                }
+                if show_new_btn {
+                    div {
+                        class: "w-full max-w-[896px] mx-auto px-3 flex justify-center",
+                        button {
+                            key: "scroll-down-btn",
+                            onclick: move |_| scroll_to_bottom(),
+                            class: "px-4 py-2 rounded-full bg-blue-600 text-white text-sm font-medium shadow-lg hover:bg-blue-500 transition-colors -mt-2 mb-1",
+                            "↓ New messages"
+                        }
                     }
                 }
-        }
-            InputArea {
-                input: input,
-                on_submit: on_submit,
-                loading_state: loading_state,
-                theme: current_theme.clone(),
-                is_inferencing: *is_loading.read(),
-            on_stop: {
-                let mut il = is_loading.clone();
-                move |_| {
-                    #[cfg(any(
-all(not(target_arch = "wasm32"), not(target_os = "android")),
-target_os = "android"
-))]
-                    llama::request_stop();
-                    il.set(false);
+                InputArea {
+                    input: input,
+                    on_submit: on_submit,
+                    loading_state: loading_state,
+                    theme: current_theme.clone(),
+                    is_inferencing: *is_loading.read(),
+                    on_stop: {
+                        let mut il = is_loading.clone();
+                        move |_| {
+                            #[cfg(any(
+                                all(not(target_arch = "wasm32"), not(target_os = "android")),
+                                target_os = "android"
+                            ))]
+                            llama::request_stop();
+                            il.set(false);
+                        }
+                    },
                 }
-            },
-            }
         }
+    }
     }
 }
 

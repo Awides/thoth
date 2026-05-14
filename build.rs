@@ -187,7 +187,28 @@ if !is_android && !is_wasm {
                 }
             }
         }
-         }
+
+        // Also copy font files next to the binary (target/<profile>/assets/fonts/)
+        // so they resolve when running `cargo run` directly (not via dx serve/bundle)
+        let out_dir = std::path::Path::new(&manifest_dir)
+            .join("target")
+            .join(&profile);
+        let dst_out_fonts = out_dir.join("assets/fonts");
+
+        if src_assets_fonts.exists() {
+            std::fs::create_dir_all(&dst_out_fonts).expect("Failed to create output assets/fonts dir");
+
+            for entry in std::fs::read_dir(&src_assets_fonts).expect("Failed to read assets/fonts") {
+                let entry = entry.expect("Invalid entry");
+                let path = entry.path();
+                if path.is_file() {
+                    let dest = dst_out_fonts.join(path.file_name().unwrap());
+                    std::fs::copy(&path, &dest)
+                        .expect(&format!("Failed to copy {} to output assets/fonts", path.display()));
+                }
+            }
+        }
+    }
      }
 
     // For Android Dioxus builds, copy native libraries into jniLibs/<abi> so they are packaged into the APK

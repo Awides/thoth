@@ -29,8 +29,8 @@ pub fn InputArea(
                         oninput: move |e| {
                             *input.write() = e.data.value();
                         },
-                        class: "flex-1 px-3 py-2 border rounded focus:outline-none focus:border-gray-500",
-                        style: format!("border-color: {}; background: {}; color: {}", theme.border(), theme.bg(), theme.fg()),
+                class: "flex-1 px-3 py-2 border rounded focus:outline-none focus:border-gray-500 bg-transparent",
+                style: format!("border-color: {}; color: {}", theme.border(), theme.fg()),
                         onmounted: move |event| {
                             spawn(async move {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -43,16 +43,16 @@ pub fn InputArea(
                             r#type: "button",
                             onclick: move |_| on_stop.call(()),
                             class: "w-10 h-[42px] grid place-items-center rounded border text-lg",
-                            style: format!("border-color: {}; background: {}; color: {}", theme.border(), theme.bg(), theme.fg()),
-                            span { class: "mt-0.5", "■" }
+            style: format!("border-color: {}; color: {}", theme.border(), theme.fg()),
+                    span { class: "mt-0.5", "■" }
                         }
                     } else {
                         button {
                             r#type: "submit",
                             disabled: matches!(*loading_state.read(), LoadingState::Loading) || input.read().trim().is_empty(),
                             class: "w-10 h-[42px] grid place-items-center rounded border disabled:opacity-50 disabled:cursor-not-allowed text-lg",
-                            style: format!("border-color: {}; background: {}; color: {}", theme.border(), theme.bg(), theme.fg()),
-                            "▲"
+            style: format!("border-color: {}; color: {}", theme.border(), theme.fg()),
+                    "▲"
                         }
                     }
                 }

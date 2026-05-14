@@ -20,6 +20,60 @@ pub struct AppConfig {
     pub onboarding_completed: bool,
     /// Theme preference
     pub theme: String,
+    /// Plasma shader configuration
+    #[serde(default)]
+    pub plasma: PlasmaConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlasmaConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_speed")]
+    pub speed: f32,
+    #[serde(default = "default_dark_colors")]
+    pub dark_colors: [f32; 9],
+    #[serde(default = "default_light_colors")]
+    pub light_colors: [f32; 9],
+    #[serde(default = "default_dark_blend")]
+    pub dark_blend: String,
+    #[serde(default = "default_light_blend")]
+    pub light_blend: String,
+}
+
+impl Default for PlasmaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            speed: default_speed(),
+            dark_colors: default_dark_colors(),
+            light_colors: default_light_colors(),
+            dark_blend: default_dark_blend(),
+            light_blend: default_light_blend(),
+        }
+    }
+}
+
+pub const BLEND_MODES: &[&str] = &[
+    "normal", "multiply", "screen", "overlay", "darken", "lighten",
+    "color-dodge", "color-burn", "hard-light", "soft-light",
+    "difference", "exclusion", "hue", "saturation", "color", "luminosity",
+];
+
+pub fn default_dark_blend() -> String { "screen".to_string() }
+pub fn default_light_blend() -> String { "multiply".to_string() }
+
+fn default_true() -> bool { true }
+fn default_speed() -> f32 { 1.0 }
+
+fn default_dark_colors() -> [f32; 9] {
+    // c1(r,g,b), c2(r,g,b), c3(r,g,b) — vibrant purple/teal/magenta
+    [0.12, 0.04, 0.24,  0.04, 0.14, 0.22,  0.18, 0.06, 0.20]
+}
+
+fn default_light_colors() -> [f32; 9] {
+    // c1(r,g,b), c2(r,g,b), c3(r,g,b) — soft warm pastels
+    [0.85, 0.82, 0.90,  0.82, 0.88, 0.92,  0.90, 0.84, 0.88]
 }
 
 impl AppConfig {
