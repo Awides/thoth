@@ -170,23 +170,24 @@ if !is_android && !is_wasm {
             }
         }
 
-        // Copy font files from assets/fonts to the bundle's app/assets/fonts
-        let src_assets_fonts = std::path::Path::new(&manifest_dir).join("assets/fonts");
-        let dst_assets_fonts = dx_app_dir.join("assets/fonts");
+    // Copy font files from assets/fonts to the bundle's app/assets/fonts
+    let src_assets_fonts = std::path::Path::new(&manifest_dir).join("assets/fonts");
+    let dst_assets_fonts = dx_app_dir.join("assets/fonts");
 
-        if src_assets_fonts.exists() {
-            std::fs::create_dir_all(&dst_assets_fonts).expect("Failed to create dst assets/fonts dir");
+    if src_assets_fonts.exists() {
+        std::fs::create_dir_all(&dst_assets_fonts).expect("Failed to create dst assets/fonts dir");
 
-            for entry in std::fs::read_dir(&src_assets_fonts).expect("Failed to read assets/fonts") {
-                let entry = entry.expect("Invalid entry");
-                let path = entry.path();
-                if path.is_file() {
-                    let dest = dst_assets_fonts.join(path.file_name().unwrap());
-                    std::fs::copy(&path, &dest)
-                        .expect(&format!("Failed to copy {} to bundle assets/fonts", path.display()));
-                }
+        for entry in std::fs::read_dir(&src_assets_fonts).expect("Failed to read assets/fonts") {
+            let entry = entry.expect("Invalid entry");
+            let path = entry.path();
+            if path.is_file() {
+                println!("cargo:rerun-if-changed={}", path.display());
+                let dest = dst_assets_fonts.join(path.file_name().unwrap());
+                std::fs::copy(&path, &dest)
+                    .expect(&format!("Failed to copy {} to bundle assets/fonts", path.display()));
             }
         }
+    }
 
         // Also copy font files next to the binary (target/<profile>/assets/fonts/)
         // so they resolve when running `cargo run` directly (not via dx serve/bundle)

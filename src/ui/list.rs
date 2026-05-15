@@ -9,6 +9,7 @@ pub fn MessageList(
     current_theme: Theme,
     at_bottom: Signal<bool>,
     has_new: Signal<bool>,
+    on_color_pick: EventHandler<(usize, String, String)>,
 ) -> Element {
     let mut frozen_items = use_signal::<Vec<Message>>(|| Vec::new());
 
@@ -71,6 +72,7 @@ pub fn MessageList(
                         msg: msg.clone(),
                         theme: current_theme.clone(),
                         show_thinking: true,
+                        on_color_pick: on_color_pick,
                     }
                 }
             },

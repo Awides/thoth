@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicU64, Ordering};
+use dioxus::prelude::{WritableExt, Signal, SyncStorage};
 
 static NEXT_MSG_ID: AtomicU64 = AtomicU64::new(100_000);
 
@@ -21,6 +22,7 @@ pub enum MessageRole { User, Assistant, System }
 pub enum MessageKind {
     Text,
     Request { request_type: String, tag: String },
+    ColorRequest { color_index: usize, tag: String, initial_hex: String },
     ToolCall { tool_name: String },
 }
 
@@ -42,6 +44,41 @@ impl Message {
         let local: chrono::DateTime<chrono::Local> = utc.into();
         local.format("%H:%M").to_string()
     }
+}
+
+pub fn hex_to_rgb(hex: &str) -> Option<[f32; 3]> {
+    let hex = hex.trim().trim_start_matches('#');
+    if hex.len() != 6 { return None; }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
+}
+
+pub fn rgb_to_hex(r: f32, g: f32, b: f32) -> String {
+    format!("#{:02x}{:02x}{:02x}",
+        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+pub fn push_system_msg(
+    msgs: &mut dioxus::prelude::Signal<Vec<Message>, dioxus::prelude::SyncStorage>,
+    nid: &mut dioxus::prelude::Signal<u64, dioxus::prelude::SyncStorage>,
+    content: String,
+    kind: MessageKind,
+) {
+    let id = nid();
+    nid.set(id + 1);
+    let _ = msgs.with_mut(|v| v.push(Message {
+        id,
+        role: MessageRole::System,
+        content,
+        thinking: String::new(),
+        kind,
+        timestamp: now_secs(),
+    }));
 }
 
 #[derive(Clone, PartialEq, Debug)]

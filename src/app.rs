@@ -5,7 +5,7 @@ all(not(target_arch = "wasm32"), not(target_os = "android")),
 target_os = "android"
 ))]
 use crate::llama;
-use crate::shared::{Message, MessageRole, MessageKind, LoadingState, Theme, now_secs, next_msg_id};
+use crate::shared::{Message, MessageRole, MessageKind, LoadingState, Theme, now_secs, next_msg_id, hex_to_rgb, rgb_to_hex, push_system_msg};
 use crate::ui::{self, MessageList, InputArea};
 use crate::system::model;
 use crate::system::config::{self, AppConfig};
@@ -114,7 +114,7 @@ fn default_system_prompt(lang: &str) -> String {
 
 fn splash_content(is_new_user: bool) -> String {
     if is_new_user {
-        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode\n- `/plasma` — configure background shader\n- `/blend` — set text blend mode over shader".to_string()
+        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode\n- `/plasma` — configure background shader\n- `/plasma color` — pick shader colors\n- `/blend` — set text blend mode over shader\n- `/fullscreen` — toggle fullscreen (or F11)".to_string()
     } else {
         "# *THOTH▷*".to_string()
     }
@@ -380,81 +380,73 @@ let mut process_input = {
         if trimmed.starts_with("/theme") { t.set(t().toggle()); return; }
         if trimmed.starts_with("/light") { t.set(Theme::Light); return; }
         if trimmed.starts_with("/dark") { t.set(Theme::Dark); return; }
-        if trimmed.starts_with("/plasma") {
-            let rest = trimmed["/plasma".len()..].trim();
-            if rest.is_empty() || rest == "show" {
-                let pc = plasma_cfg.read().clone();
-                let dc = &pc.dark_colors;
-                let lc = &pc.light_colors;
-                let msg_id = nid();
-                nid.set(msg_id + 1);
-                let _ = msgs.with_mut(|v| v.push(Message {
-                    id: msg_id, role: MessageRole::System,
-                    content: format!(
-                        "**Plasma shader:**\n- enabled: {}\n- speed: {}\n- dark colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n- light colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n\nUsage: `/plasma on|off` · `/plasma speed <0.1-5.0>` · `/plasma reset`",
-                        pc.enabled, pc.speed,
-                        dc[0],dc[1],dc[2], dc[3],dc[4],dc[5], dc[6],dc[7],dc[8],
-                        lc[0],lc[1],lc[2], lc[3],lc[4],lc[5], lc[6],lc[7],lc[8],
-                    ),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
-                }));
-            } else if rest == "on" {
-                plasma_cfg.with_mut(|p| p.enabled = true);
-                save_plasma_config(&plasma_cfg);
-                let msg_id = nid();
-                nid.set(msg_id + 1);
-                let _ = msgs.with_mut(|v| v.push(Message {
-                    id: msg_id, role: MessageRole::System,
-                    content: "Plasma enabled.".to_string(),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
-                }));
-            } else if rest == "off" {
-                plasma_cfg.with_mut(|p| p.enabled = false);
-                save_plasma_config(&plasma_cfg);
-                let msg_id = nid();
-                nid.set(msg_id + 1);
-                let _ = msgs.with_mut(|v| v.push(Message {
-                    id: msg_id, role: MessageRole::System,
-                    content: "Plasma disabled.".to_string(),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
-                }));
-            } else if rest.starts_with("speed") {
-                let val: Result<f32, _> = rest["speed".len()..].trim().parse();
-                match val {
-                    Ok(s) if s >= 0.1 && s <= 5.0 => {
-                        plasma_cfg.with_mut(|p| p.speed = s);
-                        save_plasma_config(&plasma_cfg);
-                        let msg_id = nid();
-                        nid.set(msg_id + 1);
-                        let _ = msgs.with_mut(|v| v.push(Message {
-                            id: msg_id, role: MessageRole::System,
-                            content: format!("Plasma speed set to {:.1}.", s),
-                            thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
-                        }));
-                    }
-                    _ => {
-                        let msg_id = nid();
-                        nid.set(msg_id + 1);
-                        let _ = msgs.with_mut(|v| v.push(Message {
-                            id: msg_id, role: MessageRole::System,
-                            content: "Usage: `/plasma speed <0.1-5.0>`".to_string(),
-                            thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
-                        }));
-                    }
-                }
-            } else if rest == "reset" {
-                plasma_cfg.set(config::PlasmaConfig::default());
-                save_plasma_config(&plasma_cfg);
-                let msg_id = nid();
-                nid.set(msg_id + 1);
-                let _ = msgs.with_mut(|v| v.push(Message {
-                    id: msg_id, role: MessageRole::System,
-                    content: "Plasma config reset to defaults.".to_string(),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
-                }));
-            }
-            return;
-        }
+if trimmed.starts_with("/plasma") {
+let rest = trimmed["/plasma".len()..].trim();
+if rest.is_empty() || rest == "show" {
+let pc = plasma_cfg.read().clone();
+let dc = &pc.dark_colors;
+let lc = &pc.light_colors;
+let msg_id = nid();
+nid.set(msg_id + 1);
+let _ = msgs.with_mut(|v| v.push(Message {
+id: msg_id, role: MessageRole::System,
+content: format!(
+"**Plasma shader:**\n- enabled: {}\n- speed: {}\n- dark colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n- light colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n\nUsage: `/plasma on|off` · `/plasma speed <0.1-5.0>` · `/plasma color [dark|light]` · `/plasma reset`",
+pc.enabled, pc.speed,
+dc[0],dc[1],dc[2], dc[3],dc[4],dc[5], dc[6],dc[7],dc[8],
+lc[0],lc[1],lc[2], lc[3],lc[4],lc[5], lc[6],lc[7],lc[8],
+),
+thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+}));
+} else if rest == "on" {
+plasma_cfg.with_mut(|p| p.enabled = true);
+save_plasma_config(&plasma_cfg);
+push_system_msg(&mut msgs, &mut nid, "Plasma enabled.".to_string(), MessageKind::Text);
+} else if rest == "off" {
+plasma_cfg.with_mut(|p| p.enabled = false);
+save_plasma_config(&plasma_cfg);
+push_system_msg(&mut msgs, &mut nid, "Plasma disabled.".to_string(), MessageKind::Text);
+} else if rest.starts_with("speed") {
+let val: Result<f32, _> = rest["speed".len()..].trim().parse();
+match val {
+Ok(s) if s >= 0.1 && s <= 5.0 => {
+plasma_cfg.with_mut(|p| p.speed = s);
+save_plasma_config(&plasma_cfg);
+push_system_msg(&mut msgs, &mut nid, format!("Plasma speed set to {:.1}.", s), MessageKind::Text);
+}
+_ => {
+push_system_msg(&mut msgs, &mut nid, "Usage: `/plasma speed <0.1-5.0>`".to_string(), MessageKind::Text);
+}
+}
+} else if rest.starts_with("color") {
+let target = rest["color".len()..].trim();
+let is_dark = t() == Theme::Dark;
+let theme_label = if target.is_empty() {
+if is_dark { "dark" } else { "light" }
+} else if target == "dark" {
+"dark"
+} else if target == "light" {
+"light"
+} else {
+push_system_msg(&mut msgs, &mut nid, "Usage: `/plasma color [dark|light]`".to_string(), MessageKind::Text);
+return;
+};
+let color_idx = if theme_label == "dark" { 0usize } else { 1usize };
+let pc = plasma_cfg.read().clone();
+let colors = if theme_label == "dark" { &pc.dark_colors } else { &pc.light_colors };
+let c1_hex = rgb_to_hex(colors[0], colors[1], colors[2]);
+let c2_hex = rgb_to_hex(colors[3], colors[4], colors[5]);
+let c3_hex = rgb_to_hex(colors[6], colors[7], colors[8]);
+push_system_msg(&mut msgs, &mut nid, format!("**{theme_label}** c1 (color 1):"), MessageKind::ColorRequest { color_index: color_idx * 3 + 0, tag: theme_label.to_string(), initial_hex: c1_hex });
+push_system_msg(&mut msgs, &mut nid, format!("**{theme_label}** c2 (color 2):"), MessageKind::ColorRequest { color_index: color_idx * 3 + 1, tag: theme_label.to_string(), initial_hex: c2_hex });
+push_system_msg(&mut msgs, &mut nid, format!("**{theme_label}** c3 (color 3):"), MessageKind::ColorRequest { color_index: color_idx * 3 + 2, tag: theme_label.to_string(), initial_hex: c3_hex });
+} else if rest == "reset" {
+plasma_cfg.set(config::PlasmaConfig::default());
+save_plasma_config(&plasma_cfg);
+push_system_msg(&mut msgs, &mut nid, "Plasma config reset to defaults.".to_string(), MessageKind::Text);
+}
+return;
+}
         if trimmed.starts_with("/blend") {
             let rest = trimmed["/blend".len()..].trim();
             let is_dark = t() == Theme::Dark;
@@ -504,9 +496,23 @@ let mut process_input = {
                     thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
                 }));
             }
-            return;
+        return;
+    }
+    if trimmed == "/fullscreen" {
+        #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+        {
+            let win = dioxus::desktop::window();
+            let was_fullscreen = win.fullscreen().is_some();
+            win.set_fullscreen(!was_fullscreen);
+            push_system_msg(&mut msgs, &mut nid, if was_fullscreen { "Exited fullscreen.".to_string() } else { "Entered fullscreen. Press F11 or `/fullscreen` to exit.".to_string() }, MessageKind::Text);
         }
-        if trimmed.starts_with("/system") {
+        #[cfg(any(target_arch = "wasm32", target_os = "android"))]
+        {
+            push_system_msg(&mut msgs, &mut nid, "Fullscreen not available on this platform.".to_string(), MessageKind::Text);
+        }
+        return;
+    }
+    if trimmed.starts_with("/system") {
         let rest = trimmed["/system".len()..].trim();
             if rest.is_empty() || rest == "show" {
                 let current = system_prompt_sig.read().clone();
@@ -1027,6 +1033,26 @@ let mut process_input = {
         }
     };
 
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+    let mut is_fullscreen = use_signal(|| false);
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+    let fullscreen_keydown = {
+        let mut is_fs = is_fullscreen.clone();
+        move |e: KeyboardEvent| {
+            if e.key() == Key::F11 {
+                e.prevent_default();
+                let next = !is_fs();
+                is_fs.set(next);
+                let win = dioxus::desktop::window();
+                win.set_fullscreen(next);
+            }
+        }
+    };
+
+    #[cfg(any(target_arch = "wasm32", target_os = "android"))]
+    let fullscreen_keydown = move |_e: KeyboardEvent| {};
+
     let mut input_for_submit = input.clone();
     let mut scroll_to_bottom = move || {
         spawn(async move {
@@ -1084,7 +1110,43 @@ let mut process_input = {
         });
     }
 
-        rsx! {
+        let on_color_pick = {
+let mut plasma_cfg = plasma_config.clone();
+let mut msgs = messages.clone();
+let mut nid = next_id.clone();
+let theme_sig = theme.clone();
+move |(color_index, hex_value, tag): (usize, String, String)| {
+let rgb = match hex_to_rgb(&hex_value) {
+Some(rgb) => rgb,
+None => return,
+};
+plasma_cfg.with_mut(|p| {
+let colors = if tag == "dark" { &mut p.dark_colors } else { &mut p.light_colors };
+let base = (color_index % 3) * 3;
+colors[base] = rgb[0];
+colors[base + 1] = rgb[1];
+colors[base + 2] = rgb[2];
+});
+let ci = color_index % 3 + 1;
+push_system_msg(&mut msgs, &mut nid, format!("**{tag}** c{ci} set to `{hex_value}`"), MessageKind::Text);
+save_plasma_config(&plasma_cfg);
+let pc = plasma_cfg.read().clone();
+let is_dark = theme_sig() == Theme::Dark;
+let colors = if is_dark { &pc.dark_colors } else { &pc.light_colors };
+let js = format!(
+"if(window.__plasmaUpdate)window.__plasmaUpdate({{enabled:{},speed:{},c1:[{},{},{}],c2:[{},{},{}],c3:[{},{},{}]}});",
+pc.enabled, pc.speed,
+colors[0], colors[1], colors[2],
+colors[3], colors[4], colors[5],
+colors[6], colors[7], colors[8],
+);
+spawn(async move {
+dioxus::document::eval(&js).await;
+});
+}
+};
+
+rsx! {
         style { {TAILWIND_CSS} },
         style { {FONTS_CSS} },
         style { {APP_CSS} },
@@ -1092,6 +1154,7 @@ let mut process_input = {
         div {
             class: "font-loading flex flex-col fixed inset-0 overflow-hidden",
             style: format!("color: {}", current_theme.fg()),
+            onkeydown: fullscreen_keydown,
             canvas {
                 id: "plasma-canvas",
                 class: "absolute top-0 left-0 w-full h-full pointer-events-none",
@@ -1105,6 +1168,7 @@ let mut process_input = {
                     current_theme: current_theme.clone(),
                     at_bottom: at_bottom,
                     has_new: has_new,
+                    on_color_pick: on_color_pick,
                 }
                 if show_new_btn {
                     div {
