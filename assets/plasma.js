@@ -5,17 +5,21 @@
   var gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
   if(!gl) return;
 
-  function resize(){
-    var dpr = window.devicePixelRatio || 1;
-    canvas.width = window.innerWidth * dpr;
-    canvas.height = window.innerHeight * dpr;
-    gl.viewport(0, 0, canvas.width, canvas.height);
-  }
-  resize();
-  window.addEventListener('resize', resize);
+ var rt;
+ function resize(){
+   clearTimeout(rt);
+   rt=setTimeout(function(){
+     var dpr = Math.min(window.devicePixelRatio || 1, 1);
+     canvas.width = window.innerWidth * dpr;
+     canvas.height = window.innerHeight * dpr;
+     gl.viewport(0, 0, canvas.width, canvas.height);
+   },200);
+ }
+ resize();
+ window.addEventListener('resize', resize);
 
   var vs = `attribute vec2 p;void main(){gl_Position=vec4(p,0,1);}`;
-  var fs = `precision mediump float;
+  var fs = `precision highp float;
 uniform float t;
 uniform vec2 r;
 uniform vec3 c1;
