@@ -1,128 +1,243 @@
-//! MLS (Message Layer Security) group management
-//! 
-//! Production-ready implementation using openmls crate.
-//! Note: Group creation and member management use openmls.
-//! Encryption currently uses a placeholder pending full openmls integration.
+//! MLS (Message Layer Security) group management using openmls.
+//!
+//! Real end-to-end encryption using MLS protocol:
+//! - Group creation with `MlsGroup::new_with_group_id`
+//! - Encryption via `MlsGroup::create_message` → `MlsMessageOut`
+//! - Decryption via `MlsGroup::process_message` → `ProcessedMessage`
+//! - Member addition via `MlsGroup::add_members` → (commit, welcome)
+//! - Join via `StagedWelcome::new_from_welcome` → `into_group`
+//!
+//! Wire format: MlsMessageOut → `tls_serialize_detached()` bytes → hex for transport
+//!              hex → bytes → `MlsMessageIn::tls_deserialize_exact()` → `process_message()`
 
 use anyhow::{Result, anyhow};
+use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
-use openmls::prelude::Ciphersuite;
+use tls_codec::{Serialize as TlsSerialize, Deserialize as TlsDeserialize};
 use std::collections::HashMap;
 use tracing::info;
 
-/// MLS ciphersuite for encryption
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
 
-/// MLS Group Manager
 pub struct MlsGroupManager {
-    groups: HashMap<String, MlsGroupState>,
-}
-
-/// State for each MLS group
-pub struct MlsGroupState {
-    members: Vec<String>,
-    encryption_key: Vec<u8>, // Temporary: symmetric key for encryption
     provider: OpenMlsRustCrypto,
-    signer: Option<SignatureKeyPair>,
+    groups: HashMap<String, MlsGroup>,
+    signers: HashMap<String, SignatureKeyPair>,
+    pending_signers: HashMap<String, SignatureKeyPair>,
 }
 
 impl MlsGroupManager {
     pub fn new() -> Self {
         Self {
+            provider: OpenMlsRustCrypto::default(),
             groups: HashMap::new(),
+            signers: HashMap::new(),
+            pending_signers: HashMap::new(),
         }
     }
 
-    /// Create a new MLS group with the creator as the first member
     pub fn create_group(&mut self, group_id: String, creator_identity: String) -> Result<()> {
         info!("Creating MLS group '{}' with creator '{}'", group_id, creator_identity);
-        
-        // Generate signature key pair
+
         let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
             .map_err(|e| anyhow!("Failed to create signature key pair: {:?}", e))?;
 
-        // Generate a symmetric encryption key (placeholder for real MLS)
-        let encryption_key: Vec<u8> = (0..32).map(|i| ((i + group_id.len()) as u8 ^ i as u8)).collect();
+        let credential = Credential::new(
+            CredentialType::Basic,
+            creator_identity.as_bytes().to_vec(),
+        );
+        let credential_with_key = CredentialWithKey {
+            credential,
+            signature_key: signer.to_public_vec().into(),
+        };
 
-        // Store group state
-        self.groups.insert(group_id.clone(), MlsGroupState {
-            members: vec![creator_identity.clone()],
-            encryption_key,
-            provider: OpenMlsRustCrypto::default(),
-            signer: Some(signer),
-        });
+        let group_id_bytes = group_id.as_bytes().to_vec();
+        let mls_group_id = GroupId::from_slice(&group_id_bytes);
+
+        let create_config = MlsGroupCreateConfig::builder()
+            .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
+            .ciphersuite(CIPHERSUITE)
+            .use_ratchet_tree_extension(true)
+            .build();
+
+        let group = MlsGroup::new_with_group_id(
+            &self.provider,
+            &signer,
+            &create_config,
+            mls_group_id,
+            credential_with_key,
+        ).map_err(|e| anyhow!("Failed to create MLS group: {:?}", e))?;
+
+        self.groups.insert(group_id.clone(), group);
+        self.signers.insert(group_id.clone(), signer);
 
         info!("Successfully created MLS group '{}'", group_id);
         Ok(())
     }
 
-    /// Generate a key package for export (to share with other members)
-    pub fn generate_key_package(&self, _identity: String) -> Result<Vec<u8>> {
-        // TODO: Implement key package generation with openmls
-        Ok(vec![])
+    pub fn generate_key_package(&mut self, identity: String) -> Result<Vec<u8>> {
+        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+            .map_err(|e| anyhow!("Failed to create signature key pair: {:?}", e))?;
+
+        let credential = Credential::new(
+            CredentialType::Basic,
+            identity.as_bytes().to_vec(),
+        );
+        let credential_with_key = CredentialWithKey {
+            credential,
+            signature_key: signer.to_public_vec().into(),
+        };
+
+        let key_package_bundle = KeyPackage::builder()
+            .build(
+                CIPHERSUITE,
+                &self.provider,
+                &signer,
+                credential_with_key,
+            )
+            .map_err(|e| anyhow!("Failed to generate key package: {:?}", e))?;
+
+        self.pending_signers.insert(identity.clone(), signer);
+
+        key_package_bundle.key_package()
+            .tls_serialize_detached()
+            .map_err(|e| anyhow!("Failed to serialize key package: {:?}", e))
     }
 
-    /// Add member to group using their key package bytes
-    pub fn add_member_with_key_package(&mut self, group_id: &str, _key_package_bytes: &[u8], member_identity: String) -> Result<Vec<u8>> {
-        let state = self.groups.get_mut(group_id)
+    pub fn add_member(
+        &mut self,
+        group_id: &str,
+        key_package_bytes: &[u8],
+        member_identity: String,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        let group = self.groups.get_mut(group_id)
             .ok_or_else(|| anyhow!("Group not found: {}", group_id))?;
-        
+        let signer = self.signers.get(group_id)
+            .ok_or_else(|| anyhow!("Signer not found for group: {}", group_id))?;
+
+        let key_package_in = KeyPackageIn::tls_deserialize_exact(key_package_bytes)
+            .map_err(|e| anyhow!("Failed to deserialize key package: {:?}", e))?;
+        let key_package = key_package_in
+            .validate(self.provider.crypto(), ProtocolVersion::default())
+            .map_err(|e| anyhow!("Failed to validate key package: {:?}", e))?;
+
         info!("Adding member '{}' to group '{}'", member_identity, group_id);
-        state.members.push(member_identity);
-        
-        // TODO: Implement actual MLS member addition
-        Ok(vec![])
+
+        let (commit_msg, welcome_msg, _group_info) = group
+            .add_members(&self.provider, signer, &[key_package])
+            .map_err(|e| anyhow!("Failed to add member: {:?}", e))?;
+
+        group.merge_pending_commit(&self.provider)
+            .map_err(|e| anyhow!("Failed to merge pending commit: {:?}", e))?;
+
+        let commit_bytes = commit_msg.to_bytes()
+            .map_err(|e| anyhow!("Failed to serialize commit: {:?}", e))?;
+        let welcome_bytes = welcome_msg.to_bytes()
+            .map_err(|e| anyhow!("Failed to serialize welcome: {:?}", e))?;
+
+        Ok((commit_bytes, welcome_bytes))
     }
 
-    /// Process welcome message to join a group
-    pub fn process_welcome(&mut self, _welcome_bytes: &[u8], identity: String) -> Result<String> {
-        // TODO: Implement proper welcome processing
-        let group_id = format!("welcome_{}", identity);
-        self.create_group(group_id.clone(), identity.clone())?;
-        Ok(group_id)
+    pub fn process_welcome(&mut self, welcome_bytes: &[u8], identity: String) -> Result<String> {
+        let welcome_msg_in = MlsMessageIn::tls_deserialize_exact(welcome_bytes)
+            .map_err(|e| anyhow!("Failed to deserialize welcome: {:?}", e))?;
+        let welcome = match welcome_msg_in.extract() {
+            MlsMessageBodyIn::Welcome(w) => w,
+            _ => return Err(anyhow!("Expected Welcome message in process_welcome")),
+        };
+
+        let join_config = MlsGroupJoinConfig::builder()
+            .wire_format_policy(PURE_CIPHERTEXT_WIRE_FORMAT_POLICY)
+            .use_ratchet_tree_extension(true)
+            .build();
+
+        let staged_welcome = StagedWelcome::new_from_welcome(
+            &self.provider,
+            &join_config,
+            welcome,
+            None,
+        ).map_err(|e| anyhow!("Failed to process welcome: {:?}", e))?;
+
+        let group_id_bytes = staged_welcome.group_context().group_id().as_slice();
+        let group_id_str = String::from_utf8_lossy(group_id_bytes).to_string();
+
+        let group = staged_welcome.into_group(&self.provider)
+            .map_err(|e| anyhow!("Failed to join group from welcome: {:?}", e))?;
+
+        let signer = self.pending_signers.remove(&identity)
+            .ok_or_else(|| anyhow!("No pending signer for identity '{}'", identity))?;
+
+        let gid = group_id_str.clone();
+        self.groups.insert(group_id_str, group);
+        self.signers.insert(gid.clone(), signer);
+
+        info!("Joined MLS group '{}' via welcome", gid);
+        Ok(gid)
     }
 
-    /// Encrypt message for group
     pub fn encrypt(&mut self, group_id: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
-        let state = self.groups.get_mut(group_id)
+        let group = self.groups.get_mut(group_id)
             .ok_or_else(|| anyhow!("Group not found: {}", group_id))?;
-        
+        let signer = self.signers.get(group_id)
+            .ok_or_else(|| anyhow!("Signer not found for group: {}", group_id))?;
+
         info!("Encrypting message for group '{}': {} bytes", group_id, plaintext.len());
-        
-        // XOR encryption (placeholder for real MLS)
-        let ciphertext: Vec<u8> = plaintext.iter()
-            .zip(state.encryption_key.iter().cycle())
-            .map(|(&byte, &key)| byte ^ key)
-            .collect();
-        
-        Ok(ciphertext)
+
+        let mls_message = group.create_message(&self.provider, signer, plaintext)
+            .map_err(|e| anyhow!("MLS encrypt failed: {:?}", e))?;
+
+        mls_message.to_bytes()
+            .map_err(|e| anyhow!("Failed to serialize MLS message: {:?}", e))
     }
 
-    /// Decrypt message from group
     pub fn decrypt(&mut self, group_id: &str, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let state = self.groups.get_mut(group_id)
+        let group = self.groups.get_mut(group_id)
             .ok_or_else(|| anyhow!("Group not found: {}", group_id))?;
-        
-        // XOR decryption (same as encryption for XOR)
-        let plaintext: Vec<u8> = ciphertext.iter()
-            .zip(state.encryption_key.iter().cycle())
-            .map(|(&byte, &key)| byte ^ key)
-            .collect();
-        
-        Ok(plaintext)
+
+        let mls_message_in = MlsMessageIn::tls_deserialize_exact(ciphertext)
+            .map_err(|e| anyhow!("Failed to deserialize MLS message: {:?}", e))?;
+
+        let protocol_msg = mls_message_in.try_into_protocol_message()
+            .map_err(|e| anyhow!("Message is not a protocol message: {:?}", e))?;
+
+        let processed = group.process_message(&self.provider, protocol_msg)
+            .map_err(|e| anyhow!("MLS decrypt failed: {:?}", e))?;
+
+        match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app_msg) => {
+                Ok(app_msg.into_bytes())
+            }
+            ProcessedMessageContent::StagedCommitMessage(commit) => {
+                group.merge_staged_commit(&self.provider, *commit)
+                    .map_err(|e| anyhow!("Failed to merge staged commit: {:?}", e))?;
+                Ok(Vec::new())
+            }
+            ProcessedMessageContent::ProposalMessage(proposal) => {
+                group.store_pending_proposal(self.provider.storage(), *proposal)
+                    .map_err(|e| anyhow!("Failed to store pending proposal: {:?}", e))?;
+                Ok(Vec::new())
+            }
+            _ => Err(anyhow!("Unexpected message type in decrypt")),
+        }
     }
 
-    /// Get group members
     pub fn get_members(&self, group_id: &str) -> Result<Vec<String>> {
-        let state = self.groups.get(group_id)
+        let group = self.groups.get(group_id)
             .ok_or_else(|| anyhow!("Group not found: {}", group_id))?;
-        
-        Ok(state.members.clone())
+
+        Ok(group.members()
+            .map(|m| {
+                String::from_utf8_lossy(m.credential.serialized_content()).to_string()
+            })
+            .collect())
+    }
+
+    pub fn has_group(&self, group_id: &str) -> bool {
+        self.groups.contains_key(group_id)
     }
 }
 
-/// Create device-only group (user's own devices)
 pub fn create_device_group(manager: &mut MlsGroupManager, device_ids: Vec<String>) -> Result<()> {
     let group_id = "devices".to_string();
     let creator = device_ids.first().unwrap_or(&"device_creator".to_string()).clone();
@@ -130,7 +245,6 @@ pub fn create_device_group(manager: &mut MlsGroupManager, device_ids: Vec<String
     Ok(())
 }
 
-/// Create user group (for chatting with other users)
 pub fn create_user_group(manager: &mut MlsGroupManager, group_id: String, creator: String) -> Result<()> {
     manager.create_group(group_id, creator)?;
     Ok(())
@@ -148,15 +262,38 @@ mod tests {
     }
 
     #[test]
-    fn test_encrypt_decrypt() {
+    fn test_create_and_encrypt() {
         let mut manager = MlsGroupManager::new();
-        manager.create_group("test".to_string(), "user1".to_string()).unwrap();
-        
+        manager.create_group("test".to_string(), "alice".to_string()).unwrap();
+        assert_eq!(manager.get_members("test").unwrap().len(), 1);
+
         let plaintext = b"Hello, MLS!";
-        let ciphertext = manager.encrypt("test", plaintext).unwrap();
-        let decrypted = manager.decrypt("test", &ciphertext).unwrap();
-        
-        assert_eq!(decrypted, plaintext);
-        assert_ne!(ciphertext, plaintext);
+        let _ciphertext = manager.encrypt("test", plaintext).unwrap();
+    }
+
+    #[test]
+    fn test_two_member_roundtrip() {
+        let mut alice_mgr = MlsGroupManager::new();
+        let mut bob_mgr = MlsGroupManager::new();
+
+        alice_mgr.create_group("chat".to_string(), "alice".to_string()).unwrap();
+
+        let bob_kp = bob_mgr.generate_key_package("bob".to_string()).unwrap();
+
+        let (_commit_bytes, welcome_bytes) = alice_mgr
+            .add_member("chat", &bob_kp, "bob".to_string())
+            .unwrap();
+
+        bob_mgr.process_welcome(&welcome_bytes, "bob".to_string()).unwrap();
+
+        let msg = b"Hello from Alice!";
+        let cipher = alice_mgr.encrypt("chat", msg).unwrap();
+        let plain = bob_mgr.decrypt("chat", &cipher).unwrap();
+        assert_eq!(plain, msg);
+
+        let msg2 = b"Hi from Bob!";
+        let cipher2 = bob_mgr.encrypt("chat", msg2).unwrap();
+        let plain2 = alice_mgr.decrypt("chat", &cipher2).unwrap();
+        assert_eq!(plain2, msg2);
     }
 }

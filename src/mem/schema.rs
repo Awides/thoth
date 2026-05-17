@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize};
-use crate::shared::{self, MessageRole};
+use crate::shared::{self, MessageRole, MessageKind};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChatMessage {
@@ -8,6 +8,8 @@ pub struct ChatMessage {
     pub content: String,
     pub thinking: String,
     pub timestamp: u64,
+    #[serde(default)]
+    pub sender: String,
 }
 
 impl ChatMessage {
@@ -18,10 +20,12 @@ impl ChatMessage {
                 MessageRole::User => "user",
                 MessageRole::Assistant => "assistant",
                 MessageRole::System => "system",
+                MessageRole::Peer => "peer",
             }.to_string(),
             content: m.content.clone(),
             thinking: m.thinking.clone(),
             timestamp: m.timestamp,
+            sender: m.sender.clone(),
         }
     }
 
@@ -31,12 +35,14 @@ impl ChatMessage {
             role: match self.role.as_str() {
                 "user" => MessageRole::User,
                 "assistant" => MessageRole::Assistant,
+                "peer" => MessageRole::Peer,
                 _ => MessageRole::System,
             },
             content: self.content.clone(),
             thinking: self.thinking.clone(),
             kind: shared::MessageKind::Text,
             timestamp: self.timestamp,
+            sender: self.sender.clone(),
         }
     }
 }

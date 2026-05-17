@@ -1,8 +1,17 @@
 pub mod schema;
-pub mod native;
-pub mod worker;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod native;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod worker;
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use worker::{MemvidHandle, spawn_worker};
+#[cfg(target_arch = "wasm32")]
+pub use wasm::{MemvidHandle, spawn_worker};
+
 pub use schema::{ChatMessage, ConversationSnapshot, MemoryFact};
 
 use std::path::PathBuf;

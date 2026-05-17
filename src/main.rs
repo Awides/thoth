@@ -1,21 +1,17 @@
 #![allow(warnings)]
-//! Thoth: A message-native application.
 
-// Native inference (desktop or Android ARM64) — unified llama module
 #[cfg(any(
     all(not(target_arch = "wasm32"), not(target_os = "android")),
     target_os = "android"
 ))]
 mod llama;
 
-// Core libraries
 mod key_storage;
 mod mem;
 mod net;
 mod system;
 mod tools;
 
-// Unified UI module
 mod app;
 mod shared;
 mod ui;
@@ -52,7 +48,7 @@ fn main() {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    console_error_panic_hook::set_once();
     dioxus::LaunchBuilder::new()
         .launch(app::App);
 }
-

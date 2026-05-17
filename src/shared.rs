@@ -1,4 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicU64, Ordering};
 use dioxus::prelude::{WritableExt, Signal, SyncStorage};
 
@@ -9,14 +8,29 @@ pub fn next_msg_id() -> u64 {
 }
 
 pub fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::new_0().get_time() as u64 / 1000
+    }
+}
+
+pub async fn sleep_ms(ms: u64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    { tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await; }
+    #[cfg(target_arch = "wasm32")]
+    { gloo_timers::future::TimeoutFuture::new(ms as u32).await; }
 }
 
 #[derive(Clone, PartialEq, Copy)]
-pub enum MessageRole { User, Assistant, System }
+pub enum MessageRole { User, Assistant, System, Peer }
 
 #[derive(Clone, PartialEq)]
 pub enum MessageKind {
@@ -24,6 +38,7 @@ pub enum MessageKind {
     Request { request_type: String, tag: String },
     ColorRequest { color_index: usize, tag: String, initial_hex: String },
     ToolCall { tool_name: String },
+    NostrDm { sender_pubkey: String },
 }
 
 #[derive(Clone, PartialEq)]
@@ -34,15 +49,46 @@ pub struct Message {
     pub thinking: String,
     pub kind: MessageKind,
     pub timestamp: u64,
+    pub sender: String,
+}
+
+impl Message {
+    pub fn new(id: u64, role: MessageRole, content: String, kind: MessageKind) -> Self {
+        Self {
+            id,
+            role,
+            content,
+            thinking: String::new(),
+            kind,
+            timestamp: now_secs(),
+            sender: String::new(),
+        }
+    }
+
+    pub fn with_sender(mut self, sender: String) -> Self {
+        self.sender = sender;
+        self
+    }
 }
 
 impl Message {
     pub fn timestamp_str(&self) -> String {
-        let secs = self.timestamp;
-        let utc = chrono::DateTime::from_timestamp(secs as i64, 0)
-            .unwrap_or_else(|| chrono::Utc::now());
-        let local: chrono::DateTime<chrono::Local> = utc.into();
-        local.format("%H:%M").to_string()
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let secs = self.timestamp;
+            let utc = chrono::DateTime::from_timestamp(secs as i64, 0)
+                .unwrap_or_else(|| chrono::Utc::now());
+            let local: chrono::DateTime<chrono::Local> = utc.into();
+            local.format("%H:%M").to_string()
+        }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let d = js_sys::Date::new_0();
+        d.set_time(self.timestamp as f64 * 1000.0);
+        let h = d.get_hours();
+        let m = d.get_minutes();
+        format!("{:02}:{:02}", h, m)
+    }
     }
 }
 
@@ -78,6 +124,7 @@ pub fn push_system_msg(
         thinking: String::new(),
         kind,
         timestamp: now_secs(),
+        sender: "system".to_string(),
     }));
 }
 
@@ -96,4 +143,20 @@ impl Theme {
     pub fn panel(&self) -> &'static str { match self { Theme::Light => "#f0f0f0", Theme::Dark => "#1a1a1a" } }
     pub fn border(&self) -> &'static str { match self { Theme::Light => "#e5e5e5", Theme::Dark => "#262626" } }
     pub fn muted(&self) -> &'static str { match self { Theme::Light => "neutral-900", Theme::Dark => "neutral-300" } }
+}
+
+pub fn get_hostname() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    { hostname::get().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "unknown".to_string()) }
+    #[cfg(target_arch = "wasm32")]
+    { "web".to_string() }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommandResult {
+    Handled,
+    NotACommand,
+    ClearRequested,
+    BackupRequested,
+    LoginRequested(String),
 }

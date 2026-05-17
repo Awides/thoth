@@ -31,9 +31,9 @@ pub fn InputArea(
                         },
                 class: "flex-1 px-3 py-2 border rounded focus:outline-none focus:border-gray-500 bg-transparent",
                 style: format!("border-color: {}; color: {}", theme.border(), theme.fg()),
-                        onmounted: move |event| {
-                            spawn(async move {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+onmounted: move |event| {
+        spawn(async move {
+            crate::shared::sleep_ms(100).await;
                                 let _ = event.set_focus(true).await;
                             });
                         },

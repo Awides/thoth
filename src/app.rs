@@ -1,21 +1,32 @@
 use dioxus::prelude::*;
+use std::sync::Arc;
 use crate::mem::{self, ChatMessage, ConversationSnapshot, MemoryFact};
 #[cfg(any(
 all(not(target_arch = "wasm32"), not(target_os = "android")),
 target_os = "android"
 ))]
 use crate::llama;
-use crate::shared::{Message, MessageRole, MessageKind, LoadingState, Theme, now_secs, next_msg_id, hex_to_rgb, rgb_to_hex, push_system_msg};
+use crate::shared::{Message, MessageRole, MessageKind, LoadingState, Theme, CommandResult, now_secs, next_msg_id, hex_to_rgb, rgb_to_hex, push_system_msg};
+use crate::net::{NetRuntime, NetEvent};
+use crate::net::relay_inference::{InferenceRequest, InferenceResponse, DeviceCaps};
+#[cfg(target_arch = "wasm32")]
+use nostr_sdk::ToBech32;
 use crate::ui::{self, MessageList, InputArea};
+#[cfg(any(
+    all(not(target_arch = "wasm32"), not(target_os = "android")),
+    target_os = "android"
+))]
 use crate::system::model;
 use crate::system::config::{self, AppConfig};
+use crate::system::shell::ShellManager;
 #[cfg(any(
 all(not(target_arch = "wasm32"), not(target_os = "android")),
 target_os = "android"
 ))]
 use crate::tools::{ToolEngine, parse_tool_calls};
+#[cfg(not(target_arch = "wasm32"))]
 use bip39::Mnemonic;
-use hostname;
+#[cfg(not(target_arch = "wasm32"))]
 use nostr_sdk::{Keys, ToBech32};
 
 const TAILWIND_CSS: &str = include_str!("../assets/tailwind.css");
@@ -58,7 +69,7 @@ fn detect_language() -> String {
             .unwrap_or_else(|_| "en_US.UTF-8".to_string());
         locale.split('.').next().unwrap_or("en_US").to_string()
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     {
         std::env::var("LC_ALL")
             .or_else(|_| std::env::var("LC_MESSAGES"))
@@ -68,6 +79,13 @@ fn detect_language() -> String {
             .next()
             .unwrap_or("en_US")
             .to_string()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::eval("navigator.language || 'en-US'")
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_else(|| "en_US".to_string())
     }
 }
 
@@ -133,7 +151,12 @@ pub fn App() -> Element {
     let messages = use_signal_sync(|| Vec::<Message>::new());
     let next_id = use_signal_sync(|| 0u64);
     let mut is_loading = use_signal_sync(|| false);
-    let loading_state = use_signal_sync(|| LoadingState::Loading);
+    let loading_state = use_signal_sync(|| {
+        #[cfg(target_arch = "wasm32")]
+        { LoadingState::Ready }
+        #[cfg(not(target_arch = "wasm32"))]
+        { LoadingState::Loading }
+    });
     let input = use_signal(|| String::new());
     let mut at_bottom = use_signal(|| true);
     let mut has_new = use_signal(|| false);
@@ -148,11 +171,96 @@ pub fn App() -> Element {
             .unwrap_or_default()
     });
 
+    let net_runtime = use_signal_sync(|| {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        Arc::new(NetRuntime::new(tx))
+    });
+    let mut net_connected = use_signal_sync(|| false);
+
+    #[cfg(target_arch = "wasm32")]
+    let _net_fut = {
+        let mut net_conn = net_connected.clone();
+        let mut msgs = messages.clone();
+        let mut nid = next_id.clone();
+        let net = net_runtime.clone();
+        spawn(async move {
+            let rt = net.read().clone();
+        rt.set_event_callback({
+            let mut msgs = msgs.clone();
+            let mut nid = nid.clone();
+            move |ev: NetEvent| {
+                    match ev {
+                        NetEvent::NostrMessage { sender, content } => {
+                            let id = nid.peek().clone();
+                            nid.set(id + 1);
+                            msgs.with_mut(|v| v.push(Message {
+                                id,
+                                role: MessageRole::Peer,
+                                content,
+                                thinking: String::new(),
+                                kind: MessageKind::NostrDm { sender_pubkey: sender.clone() },
+                                sender,
+                                timestamp: now_secs(),
+                            }));
+                        }
+            NetEvent::DeviceDiscovered(caps) => {
+                    let id = nid.peek().clone();
+                    nid.set(id + 1);
+                    push_system_msg(&mut msgs, &mut nid, format!("Device discovered: {} (score={:.0})", caps.device_name, caps.score()), MessageKind::Text);
+                }
+                        _ => {}
+                    }
+                }
+            });
+            match rt.start().await {
+                Ok(()) => {
+                    net_conn.set(true);
+                    push_system_msg(&mut msgs, &mut nid, "Connected to Nostr network.".to_string(), MessageKind::Text);
+                    if let Some(pk) = rt.public_key().await {
+                        push_system_msg(&mut msgs, &mut nid, format!("Your public key: `{}`", pk), MessageKind::Text);
+                    }
+                }
+                Err(e) => {
+                    push_system_msg(&mut msgs, &mut nid, format!("Failed to connect: {}", e), MessageKind::Text);
+                }
+            }
+        })
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let _net_cb = {
+        let net = net_runtime.clone();
+        let mut msgs = messages.clone();
+        let mut nid = next_id.clone();
+        let rt = net.read().clone();
+        rt.set_event_callback(move |ev: NetEvent| {
+            match ev {
+                NetEvent::NostrMessage { sender, content } => {
+                    let id = nid.peek().clone();
+                    nid.set(id + 1);
+                    msgs.with_mut(|v| v.push(Message {
+                        id,
+                        role: MessageRole::Peer,
+                        content,
+                        thinking: String::new(),
+                        kind: MessageKind::NostrDm { sender_pubkey: sender.clone() },
+                        sender,
+                        timestamp: now_secs(),
+                    }));
+                }
+                NetEvent::DeviceDiscovered(caps) => {
+                    push_system_msg(&mut msgs, &mut nid, format!("Device discovered: {} (score={:.0})", caps.device_name, caps.score()), MessageKind::Text);
+                }
+                _ => {}
+            }
+        });
+    };
+
     #[cfg(any(
-all(not(target_arch = "wasm32"), not(target_os = "android")),
-target_os = "android"
+        all(not(target_arch = "wasm32"), not(target_os = "android")),
+        target_os = "android"
     ))]
-let tool_engine = use_signal_sync(|| {
+    let tool_engine = use_signal_sync(|| {
     let tool_dir = {
         let candidate = std::env::current_dir()
             .unwrap_or_default()
@@ -227,7 +335,7 @@ target_os = "android"
         let memh = memh.read().clone();
         let mut facts_sig = facts_load.clone();
         async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            crate::shared::sleep_ms(100).await;
             #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
             let is_dark = {
                 let scheme = std::process::Command::new("gsettings")
@@ -300,7 +408,8 @@ target_os = "android"
                             content: splash_content(is_new),
                             thinking: String::new(),
                             kind: MessageKind::Text,
-                            timestamp: now_secs(),
+                            sender: String::new(),
+            timestamp: now_secs(),
                         }));
                         } else {
                             for cm in &snap.messages {
@@ -321,7 +430,8 @@ target_os = "android"
                         content: splash_content(is_new),
                         thinking: String::new(),
                         kind: MessageKind::Text,
-                        timestamp: now_secs(),
+                        sender: String::new(),
+            timestamp: now_secs(),
                     }));
                 }
             }
@@ -335,7 +445,8 @@ target_os = "android"
                 content: splash_content(is_new),
                 thinking: String::new(),
                 kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
             }));
             }
         }
@@ -396,7 +507,8 @@ pc.enabled, pc.speed,
 dc[0],dc[1],dc[2], dc[3],dc[4],dc[5], dc[6],dc[7],dc[8],
 lc[0],lc[1],lc[2], lc[3],lc[4],lc[5], lc[6],lc[7],lc[8],
 ),
-thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
 }));
 } else if rest == "on" {
 plasma_cfg.with_mut(|p| p.enabled = true);
@@ -460,7 +572,8 @@ return;
                 let _ = msgs.with_mut(|v| v.push(Message {
                     id: msg_id, role: MessageRole::System,
                     content: format!("**Blend mode ({theme_label}):** `{current}`\n**Dark:** `{}` · **Light:** `{}`\n\nAvailable:\n{modes}\n\nUsage: `/blend <mode>` — sets for current theme\n`/blend reset` — reset current theme to default", pc.dark_blend, pc.light_blend),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                    thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
                 }));
             } else if rest == "reset" {
                 let default = if is_dark { config::default_dark_blend() } else { config::default_light_blend() };
@@ -473,7 +586,8 @@ return;
                 let _ = msgs.with_mut(|v| v.push(Message {
                     id: msg_id, role: MessageRole::System,
                     content: format!("Blend mode ({theme_label}) reset to `{default}`."),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                    thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
                 }));
             } else if config::BLEND_MODES.contains(&rest) {
                 plasma_cfg.with_mut(|p| {
@@ -485,7 +599,8 @@ return;
                 let _ = msgs.with_mut(|v| v.push(Message {
                     id: msg_id, role: MessageRole::System,
                     content: format!("Blend mode ({theme_label}) set to `{rest}`."),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                    thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
                 }));
             } else {
                 let msg_id = nid();
@@ -493,7 +608,8 @@ return;
                 let _ = msgs.with_mut(|v| v.push(Message {
                     id: msg_id, role: MessageRole::System,
                     content: format!("Unknown blend mode `{rest}`. Type `/blend` to see available modes."),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                    thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
                 }));
             }
         return;
@@ -521,7 +637,8 @@ return;
                 let _ = msgs.with_mut(|v| v.push(Message {
                     id: msg_id, role: MessageRole::System,
                     content: format!("**System prompt:**\n```\n{}\n```", current),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                    thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
                 }));
             } else if rest == "reset" {
                 system_prompt_sig.set(default_system_prompt(&detect_language()));
@@ -530,7 +647,8 @@ return;
                 let _ = msgs.with_mut(|v| v.push(Message {
                     id: msg_id, role: MessageRole::System,
                     content: "System prompt reset to default.".to_string(),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                    thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
                 }));
             } else {
                 system_prompt.set(rest.to_string());
@@ -539,7 +657,8 @@ return;
                 let _ = msgs.with_mut(|v| v.push(Message {
                     id: msg_id, role: MessageRole::System,
                     content: format!("System prompt updated:\n```\n{}\n```", rest),
-                    thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs(),
+                    thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
+            timestamp: now_secs(),
                 }));
             }
             return;
@@ -556,6 +675,7 @@ return;
             content: splash_content(false),
             thinking: String::new(),
             kind: MessageKind::Text,
+            sender: String::new(),
             timestamp: now_secs(),
         };
         msgs.with_mut(|v| v.push(welcome.clone()));
@@ -579,7 +699,8 @@ return;
                                 content: format!("**Your backup phrase:**\n\n`{}`\n\nWrite this down and store it safely. Anyone with this phrase can access your identity.", mnemonic),
                                 thinking: String::new(),
                                 kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                             }));
                         } else {
                             let msg_id = nid();
@@ -590,7 +711,8 @@ return;
                                 content: "No backup phrase found. Use `/login <mnemonic>` to set up your identity with a backup phrase, or start chatting to generate a new identity.".to_string(),
                                 thinking: String::new(),
                                 kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                             }));
                         }
                     }
@@ -603,7 +725,8 @@ return;
                             content: format!("Error loading config: {}", e),
                             thinking: String::new(),
                             kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                         }));
                     }
                 }
@@ -620,7 +743,8 @@ return;
                         content: "Usage: `/login <12-word backup phrase>`".to_string(),
                         thinking: String::new(),
                         kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                     }));
                     return;
                 }
@@ -652,7 +776,8 @@ return;
                                              content: format!("✅ **Identity restored!**\n\nYour public key: `{}`\n\nBackup phrase saved. You can now use Thoth with your identity.", pubkey_for_display),
                                             thinking: String::new(),
                                             kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                                         }));
                                     }
                                     Err(e) => {
@@ -664,7 +789,8 @@ return;
                                             content: format!("Error saving config: {}", e),
                                             thinking: String::new(),
                                             kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                                         }));
                                     }
                                 }
@@ -678,7 +804,8 @@ return;
                                     content: format!("Error deriving public key: {}", e),
                                     thinking: String::new(),
                                     kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                                 }));
                             }
                         }
@@ -692,7 +819,8 @@ return;
                             content: "Invalid backup phrase. Please check the 12 words and try again.".to_string(),
                             thinking: String::new(),
                             kind: MessageKind::Text,
-                timestamp: now_secs(),
+                sender: String::new(),
+            timestamp: now_secs(),
                         }));
                     }
                 }
@@ -701,7 +829,7 @@ return;
 
         let uid = nid();
         nid.set(uid + 1);
-    let user_msg = Message { id: uid, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs() };
+        let user_msg = Message { id: uid, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text, sender: "You".to_string(), timestamp: now_secs() };
     msgs.with_mut(|v| v.push(user_msg.clone()));
     memh.read().clone().append_message(ChatMessage::from_shared(&user_msg));
 
@@ -709,7 +837,7 @@ return;
 
         let aid = nid();
         nid.set(aid + 1);
-        let asst_msg = Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text, timestamp: now_secs() };
+        let asst_msg = Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text, sender: "Tot".to_string(), timestamp: now_secs() };
         msgs.with_mut(|v| v.push(asst_msg.clone()));
 
         il.set(true);
@@ -835,7 +963,8 @@ return;
                         content: String::new(),
                         thinking: String::new(),
                         kind: MessageKind::ToolCall { tool_name: tc.name.clone() },
-                        timestamp: now_secs(),
+                        sender: String::new(),
+            timestamp: now_secs(),
                     }));
                     tool_call_ids.push(tc_id);
                 }
@@ -880,7 +1009,8 @@ return;
                         content: String::new(),
                         thinking: String::new(),
                         kind: MessageKind::Text,
-                        timestamp: now_secs(),
+                        sender: String::new(),
+            timestamp: now_secs(),
                     }));
 
                 // Remove ephemeral tool-call messages and the original trigger message
@@ -978,60 +1108,314 @@ return;
         }
     };
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        loading_state.set(LoadingState::Ready);
-
-        let msgs = messages.clone();
-        let nid = next_id.clone();
+#[cfg(target_arch = "wasm32")]
+{
+    let mut msgs = messages.clone();
+    let mut nid = next_id.clone();
+    if msgs.read().is_empty() {
         let id = nid();
         nid.set(id + 1);
         msgs.with_mut(|v| v.push(Message {
             id, role: MessageRole::System,
-            content: "Web UI: local inference not available. Please use desktop or Android app.".to_string(),
+            content: splash_content(config::needs_onboarding()),
             thinking: String::new(), kind: MessageKind::Text,
-                timestamp: now_secs(),
+            sender: String::new(),
+            timestamp: now_secs(),
         }));
     }
+}
 
     #[cfg(target_arch = "wasm32")]
     let mut process_input = {
         let msgs = messages.clone();
         let nid = next_id.clone();
         let il = is_loading.clone();
+        let t = theme.clone();
+        let sp = system_prompt.clone();
+        let mut pc = plasma_config.clone();
+        let net = net_runtime.clone();
+        let net_conn = net_connected.clone();
         move |input: String| {
             let mut msgs = msgs;
             let mut nid = nid;
             let mut il = il;
-            il.set(true);
-            let trimmed = input.trim().to_string();
-            if trimmed.is_empty() { il.set(false); return; }
+            let mut t = t;
+            let mut system_prompt_sig = sp;
+            let mut plasma_cfg = pc;
+        let trimmed = input.trim().to_string();
+        if trimmed.is_empty() { return; }
 
-            let uid = nid();
-            nid.set(uid + 1);
-            msgs.with_mut(|v| v.push(Message {
-                id: uid, role: MessageRole::User, content: trimmed.clone(),
-                thinking: String::new(), kind: MessageKind::Text,
-                timestamp: now_secs(),
-            }));
-
-            let aid = nid();
-            nid.set(aid + 1);
-            msgs.with_mut(|v| v.push(Message {
-                id: aid, role: MessageRole::Assistant, content: String::new(),
-                thinking: String::new(), kind: MessageKind::Text,
-                timestamp: now_secs(),
-            }));
-
-            msgs.with_mut(|v| {
-                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                    msg.content = "Web: remote inference not implemented yet.".to_string();
+        if trimmed.starts_with("/theme") { t.set(t().toggle()); return; }
+        if trimmed.starts_with("/light") { t.set(Theme::Light); return; }
+        if trimmed.starts_with("/dark") { t.set(Theme::Dark); return; }
+        if trimmed.starts_with("/plasma") {
+            let rest = trimmed["/plasma".len()..].trim();
+            if rest.is_empty() || rest == "show" {
+                let pc = plasma_cfg.read().clone();
+                let dc = &pc.dark_colors;
+                let lc = &pc.light_colors;
+                push_system_msg(&mut msgs, &mut nid, format!(
+                    "**Plasma shader:**\n- enabled: {}\n- speed: {}\n- dark colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n- light colors: [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}] [{:.2},{:.2},{:.2}]\n\nUsage: `/plasma on|off` · `/plasma speed <0.1-5.0>` · `/plasma color [dark|light]` · `/plasma reset`",
+                    pc.enabled, pc.speed,
+                    dc[0],dc[1],dc[2], dc[3],dc[4],dc[5], dc[6],dc[7],dc[8],
+                    lc[0],lc[1],lc[2], lc[3],lc[4],lc[5], lc[6],lc[7],lc[8],
+                ), MessageKind::Text);
+            } else if rest == "on" {
+                plasma_cfg.with_mut(|p| p.enabled = true);
+                save_plasma_config(&plasma_cfg);
+                push_system_msg(&mut msgs, &mut nid, "Plasma enabled.".to_string(), MessageKind::Text);
+            } else if rest == "off" {
+                plasma_cfg.with_mut(|p| p.enabled = false);
+                save_plasma_config(&plasma_cfg);
+                push_system_msg(&mut msgs, &mut nid, "Plasma disabled.".to_string(), MessageKind::Text);
+            } else if rest.starts_with("speed") {
+                let val: Result<f32, _> = rest["speed".len()..].trim().parse();
+                match val {
+                    Ok(s) if s >= 0.1 && s <= 5.0 => {
+                        plasma_cfg.with_mut(|p| p.speed = s);
+                        save_plasma_config(&plasma_cfg);
+                        push_system_msg(&mut msgs, &mut nid, format!("Plasma speed set to {:.1}.", s), MessageKind::Text);
+                    }
+                    _ => { push_system_msg(&mut msgs, &mut nid, "Usage: `/plasma speed <0.1-5.0>`".to_string(), MessageKind::Text); }
                 }
-            });
-
-            il.set(false);
+            } else if rest.starts_with("color") {
+                let target = rest["color".len()..].trim();
+                let is_dark = t() == Theme::Dark;
+                let theme_label = if target.is_empty() {
+                    if is_dark { "dark" } else { "light" }
+                } else if target == "dark" { "dark" }
+                else if target == "light" { "light" }
+                else { push_system_msg(&mut msgs, &mut nid, "Usage: `/plasma color [dark|light]`".to_string(), MessageKind::Text); return; };
+                let color_idx = if theme_label == "dark" { 0usize } else { 1usize };
+                let pc_r = plasma_cfg.read().clone();
+                let colors = if theme_label == "dark" { &pc_r.dark_colors } else { &pc_r.light_colors };
+                let c1_hex = rgb_to_hex(colors[0], colors[1], colors[2]);
+                let c2_hex = rgb_to_hex(colors[3], colors[4], colors[5]);
+                let c3_hex = rgb_to_hex(colors[6], colors[7], colors[8]);
+                push_system_msg(&mut msgs, &mut nid, format!("**{theme_label}** c1 (color 1):"), MessageKind::ColorRequest { color_index: color_idx * 3 + 0, tag: theme_label.to_string(), initial_hex: c1_hex });
+                push_system_msg(&mut msgs, &mut nid, format!("**{theme_label}** c2 (color 2):"), MessageKind::ColorRequest { color_index: color_idx * 3 + 1, tag: theme_label.to_string(), initial_hex: c2_hex });
+                push_system_msg(&mut msgs, &mut nid, format!("**{theme_label}** c3 (color 3):"), MessageKind::ColorRequest { color_index: color_idx * 3 + 2, tag: theme_label.to_string(), initial_hex: c3_hex });
+            } else if rest == "reset" {
+                plasma_cfg.set(config::PlasmaConfig::default());
+                save_plasma_config(&plasma_cfg);
+                push_system_msg(&mut msgs, &mut nid, "Plasma config reset to defaults.".to_string(), MessageKind::Text);
+            }
+            return;
         }
-    };
+        if trimmed.starts_with("/blend") {
+            let rest = trimmed["/blend".len()..].trim();
+            let is_dark = t() == Theme::Dark;
+            let theme_label = if is_dark { "dark" } else { "light" };
+            if rest.is_empty() || rest == "show" {
+                let pc_r = plasma_cfg.read().clone();
+                let current = if is_dark { &pc_r.dark_blend } else { &pc_r.light_blend };
+                let modes = config::BLEND_MODES.join(" · ");
+                push_system_msg(&mut msgs, &mut nid, format!("**Blend mode ({theme_label}):** `{current}`\n**Dark:** `{}` · **Light:** `{}`\n\nAvailable:\n{modes}\n\nUsage: `/blend <mode>` — sets for current theme\n`/blend reset` — reset current theme to default", pc_r.dark_blend, pc_r.light_blend), MessageKind::Text);
+            } else if rest == "reset" {
+                let default = if is_dark { config::default_dark_blend() } else { config::default_light_blend() };
+                plasma_cfg.with_mut(|p| { if is_dark { p.dark_blend = default.clone(); } else { p.light_blend = default.clone(); } });
+                save_plasma_config(&plasma_cfg);
+                push_system_msg(&mut msgs, &mut nid, format!("Blend mode ({theme_label}) reset to `{default}`."), MessageKind::Text);
+            } else if config::BLEND_MODES.contains(&rest) {
+                plasma_cfg.with_mut(|p| { if is_dark { p.dark_blend = rest.to_string(); } else { p.light_blend = rest.to_string(); } });
+                save_plasma_config(&plasma_cfg);
+                push_system_msg(&mut msgs, &mut nid, format!("Blend mode ({theme_label}) set to `{rest}`."), MessageKind::Text);
+            } else {
+                push_system_msg(&mut msgs, &mut nid, format!("Unknown blend mode `{rest}`. Type `/blend` to see available modes."), MessageKind::Text);
+            }
+            return;
+        }
+        if trimmed == "/fullscreen" {
+            push_system_msg(&mut msgs, &mut nid, "Fullscreen not available on this platform.".to_string(), MessageKind::Text);
+            return;
+        }
+        if trimmed.starts_with("/system") {
+            let rest = trimmed["/system".len()..].trim();
+            if rest.is_empty() || rest == "show" {
+                let current = system_prompt_sig.read().clone();
+                push_system_msg(&mut msgs, &mut nid, format!("**System prompt:**\n```\n{}\n```", current), MessageKind::Text);
+            } else if rest == "reset" {
+                system_prompt_sig.set(default_system_prompt(&detect_language()));
+                push_system_msg(&mut msgs, &mut nid, "System prompt reset to default.".to_string(), MessageKind::Text);
+            } else {
+                system_prompt_sig.set(rest.to_string());
+                push_system_msg(&mut msgs, &mut nid, format!("System prompt updated:\n```\n{}\n```", rest), MessageKind::Text);
+            }
+            return;
+        }
+        if trimmed == "/clear" {
+            msgs.set(Vec::new());
+            let msg_id = nid();
+            nid.set(msg_id + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: msg_id, role: MessageRole::System,
+                content: splash_content(false),
+                thinking: String::new(), kind: MessageKind::Text,
+                sender: String::new(),
+            timestamp: now_secs(),
+            }));
+            return;
+        }
+        if trimmed == "/backup" {
+            if let Some(window) = web_sys::window() {
+                if let Ok(Some(storage)) = window.local_storage() {
+                    if let Ok(Some(nsec)) = storage.get_item("thoth_nsec") {
+                        push_system_msg(&mut msgs, &mut nid, format!("**Your backup key:**\n\n`{}`\n\nStore this safely. Anyone with this key can access your identity.", nsec), MessageKind::Text);
+                    } else {
+                        push_system_msg(&mut msgs, &mut nid, "No backup key found. Start chatting to generate an identity, or use `/login <nsec>` to restore one.".to_string(), MessageKind::Text);
+                    }
+                }
+            }
+            return;
+        }
+        if trimmed.starts_with("/login ") {
+            let nsec_str = trimmed["/login ".len()..].trim();
+            if nsec_str.is_empty() {
+                push_system_msg(&mut msgs, &mut nid, "Usage: `/login <nsec1...>`".to_string(), MessageKind::Text);
+                return;
+            }
+            if let Ok(keys) = nostr_sdk::Keys::parse(nsec_str) {
+                if let Some(window) = web_sys::window() {
+                    if let Ok(Some(storage)) = window.local_storage() {
+                        let _ = storage.set_item("thoth_nsec", nsec_str);
+                    }
+                }
+                let pk = keys.public_key().to_bech32().unwrap_or_else(|_| "unknown".to_string());
+                push_system_msg(&mut msgs, &mut nid, format!("Identity restored! Public key: `{}`\n\nReconnecting to Nostr...", pk), MessageKind::Text);
+                let rt = net.read().clone();
+                let mut nc = net_conn.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match rt.start().await {
+                        Ok(()) => { nc.set(true); }
+                        Err(_) => {}
+                    }
+                });
+            } else {
+                push_system_msg(&mut msgs, &mut nid, "Invalid nsec key. Check the format and try again.".to_string(), MessageKind::Text);
+            }
+            return;
+        }
+            if trimmed.starts_with("/dm ") {
+                let rest = trimmed["/dm ".len()..].trim();
+                let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
+                if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
+                    push_system_msg(&mut msgs, &mut nid, "Usage: `/dm <npub1...> <message>`".to_string(), MessageKind::Text);
+                    return;
+                }
+                let recipient = parts[0].to_string();
+                let dm_content = parts[1].to_string();
+                let rt = net.read().clone();
+                let mut ms = msgs.clone();
+                let mut nid_c = nid.clone();
+                let recipient_display = recipient.chars().take(12).collect::<String>();
+                let uid = nid();
+                nid.set(uid + 1);
+                msgs.with_mut(|v| v.push(Message {
+                    id: uid, role: MessageRole::User, content: dm_content.clone(),
+                    thinking: String::new(), kind: MessageKind::NostrDm { sender_pubkey: "You".to_string() },
+                    sender: "You".to_string(), timestamp: now_secs(),
+                }));
+                wasm_bindgen_futures::spawn_local(async move {
+                    match rt.send_nostr_message(dm_content).await {
+                        Ok(()) => {
+                            push_system_msg(&mut ms, &mut nid_c, format!("DM sent to `{recipient_display}...`"), MessageKind::Text);
+                        }
+                        Err(e) => {
+                            push_system_msg(&mut ms, &mut nid_c, format!("Failed to send DM: {e}"), MessageKind::Text);
+                        }
+                    }
+                });
+                return;
+            }
+            if trimmed.starts_with('/') {
+            push_system_msg(&mut msgs, &mut nid, format!("Unknown command: `{trimmed}`"), MessageKind::Text);
+            return;
+        }
+
+        il.set(true);
+        let uid = nid();
+        nid.set(uid + 1);
+        msgs.with_mut(|v| v.push(Message {
+            id: uid, role: MessageRole::User, content: trimmed.clone(),
+            thinking: String::new(), kind: MessageKind::Text,
+            sender: String::new(),
+            timestamp: now_secs(),
+        }));
+
+        let aid = nid();
+        nid.set(aid + 1);
+        msgs.with_mut(|v| v.push(Message {
+            id: aid, role: MessageRole::Assistant, content: String::new(),
+            thinking: String::new(), kind: MessageKind::Text,
+            sender: String::new(),
+            timestamp: now_secs(),
+        }));
+
+        let current_sp = system_prompt_sig.read().clone();
+        let rt = net.read().clone();
+        let connected = net_conn.peek().clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut ms = msgs;
+            let mut il = il;
+
+            if !connected {
+                ms.with_mut(|v| {
+                    if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                        msg.content = "Not connected to Nostr yet. Waiting for connection...".to_string();
+                    }
+                });
+                il.set(false);
+                return;
+            }
+
+            let req = InferenceRequest {
+                request_id: format!("web-{}", next_msg_id()),
+                prompt_segments: vec![trimmed.clone()],
+                system_prompt: current_sp,
+                model_hint: None,
+                max_tokens: Some(512),
+                temperature: Some(0.5),
+            };
+
+            match rt.send_inference_request(req).await {
+                Ok(rx) => {
+                    ms.with_mut(|v| {
+                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                            msg.content = "_waiting for device..._".to_string();
+                        }
+                    });
+                    match rx.await {
+                        Ok(resp) => {
+                            ms.with_mut(|v| {
+                                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                    if !resp.thinking.is_empty() {
+                                        msg.thinking = resp.thinking;
+                                    }
+                                    msg.content = resp.content;
+                                }
+                            });
+                        }
+                        Err(_) => {
+                            ms.with_mut(|v| {
+                                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                    msg.content = "Inference request timed out.".to_string();
+                                }
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    ms.with_mut(|v| {
+                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                            msg.content = format!("No device available: {}", e);
+                        }
+                    });
+                }
+            }
+            il.set(false);
+        });
+    }
+};
 
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     let mut is_fullscreen = use_signal(|| false);
@@ -1055,8 +1439,8 @@ return;
 
     let mut input_for_submit = input.clone();
     let mut scroll_to_bottom = move || {
-        spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+spawn(async move {
+        crate::shared::sleep_ms(10).await;
             let js = r#"var el = document.getElementById('message-list'); if (el) { el.scrollTop = 0; }"#;
             let _ = dioxus::document::eval(js).await;
         });

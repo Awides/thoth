@@ -8,7 +8,7 @@ mod llama;
 
 mod key_storage;
 mod mem;
-mod net;
+pub mod net;
 mod system;
 mod tools;
 
