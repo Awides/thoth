@@ -6,7 +6,7 @@ use serde::{Serialize, Deserialize};
 /// Index key kinds
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum IndexKeyKind {
-    Shell = 0,
+    App = 0,
     Tag = 1,
     User = 2,
     MessageType = 3,
@@ -20,8 +20,8 @@ pub struct IndexKey {
 }
 
 impl IndexKey {
-    pub fn shell(shell_id: u32) -> Self {
-        Self { kind: IndexKeyKind::Shell, value: shell_id.to_string() }
+    pub fn app(app_id: u32) -> Self {
+        Self { kind: IndexKeyKind::App, value: app_id.to_string() }
     }
     pub fn tag(tag: &str) -> Self {
         Self { kind: IndexKeyKind::Tag, value: tag.to_string() }

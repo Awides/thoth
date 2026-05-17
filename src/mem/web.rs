@@ -304,7 +304,7 @@ impl MemvidHarness {
 
     fn extract_index_keys(&self, event: &MessageEvent) -> Vec<IndexKey> {
         let mut keys = Vec::new();
-        keys.push(IndexKey::shell(event.shell_id));
+            keys.push(IndexKey::app(event.shell_id));
         keys.push(IndexKey::user(&event.message.sender_id));
         keys.push(IndexKey::msg_type(&event.message.msg_type));
         if let Some(ref kind) = event.message.element_kind {
@@ -352,7 +352,7 @@ impl MemvidHarness {
             if state.dirty {
                 let payload = IndexPayload {
                     key_kind: match key.kind {
-                        IndexKeyKind::Shell => 0,
+                        IndexKeyKind::App => 0,
                         IndexKeyKind::Tag => 1,
                         IndexKeyKind::User => 2,
                         IndexKeyKind::MessageType => 3,

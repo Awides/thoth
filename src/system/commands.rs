@@ -135,8 +135,13 @@ impl Command {
                 ])
             }
             Command::Relays => {
+                let relay_list: String = crate::net::runtime::DEFAULT_RELAYS
+                    .iter()
+                    .map(|r| format!("- `{}`", r))
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 DialogResponse::messages(vec![
-                    NetMessage::system("📡 **Nostr Relays**:\n- `wss://relay.nostr.io` (connected)\n- `wss://relay.damus.io` (connected)\n\nUse `/relay add <url>` to add more."),
+                    NetMessage::system(&format!("**Nostr Relays:**\n{relay_list}\n\nUse `/relays` to see live status, `/relay_add <url>` to add more.")),
                 ])
             }
             Command::Clear => {

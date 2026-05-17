@@ -1,7 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod key_manager;
 pub mod config;
-pub mod shell;
+pub mod agent;
+pub mod app_shell;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dialog;

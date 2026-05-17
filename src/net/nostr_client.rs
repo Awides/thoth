@@ -1,6 +1,6 @@
 use anyhow::Result;
 use nostr_sdk::prelude::*;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct NostrClient {
     client: Client,
@@ -14,14 +14,8 @@ impl NostrClient {
             .signer(keys.clone())
             .build();
 
-        let relays = vec![
-            "wss://relay.nostr.io",
-            "wss://nos.lol",
-            "wss://relay.damus.io",
-        ];
-
-        for relay in &relays {
-            client.add_relay(*relay).await?;
+        for &relay in crate::net::runtime::DEFAULT_RELAYS {
+            client.add_relay(relay).await?;
         }
 
         client.connect().await;
@@ -91,6 +85,10 @@ impl NostrClient {
         self._keys.public_key().to_bech32().unwrap_or_default()
     }
 
+    pub fn public_key_hex(&self) -> String {
+        self._keys.public_key().to_hex()
+    }
+
     pub fn client(&self) -> &Client {
         &self.client
     }
@@ -104,6 +102,43 @@ impl NostrClient {
 
     pub async fn subscribe(&self, filter: Filter) -> Result<()> {
         let _subscription_id = self.client.subscribe(vec![filter], None).await?;
+        Ok(())
+    }
+
+    pub async fn relay_statuses(&self) -> Vec<(String, String)> {
+        let relays = self.client.relays().await;
+        let mut statuses = Vec::new();
+        for (url, relay) in &relays {
+            let status = match relay.status() {
+                RelayStatus::Initialized => "initialized",
+                RelayStatus::Pending => "pending",
+                RelayStatus::Connecting => "connecting",
+                RelayStatus::Connected => "connected",
+                RelayStatus::Disconnected => "disconnected",
+                RelayStatus::Terminated => "terminated",
+                _ => "unknown",
+            };
+            statuses.push((url.to_string(), status.to_string()));
+        }
+        statuses.sort_by(|a, b| a.0.cmp(&b.0));
+        statuses
+    }
+
+    pub async fn connected_count(&self) -> usize {
+        let relays = self.client.relays().await;
+        relays.values().filter(|r| r.is_connected()).count()
+    }
+
+    pub async fn add_relay(&self, url: &str) -> Result<()> {
+        self.client.add_relay(url).await?;
+        self.client.connect_relay(url).await?;
+        info!("Added and connected to relay: {}", url);
+        Ok(())
+    }
+
+    pub async fn remove_relay(&self, url: &str) -> Result<()> {
+        self.client.remove_relay(url).await?;
+        info!("Removed relay: {}", url);
         Ok(())
     }
 }

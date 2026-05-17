@@ -18,7 +18,8 @@ use crate::ui::{self, MessageList, InputArea};
 ))]
 use crate::system::model;
 use crate::system::config::{self, AppConfig};
-use crate::system::shell::ShellManager;
+use crate::system::agent::AgentManager;
+use crate::system::app_shell::ShellManager;
 #[cfg(any(
 all(not(target_arch = "wasm32"), not(target_os = "android")),
 target_os = "android"
@@ -132,7 +133,7 @@ fn default_system_prompt(lang: &str) -> String {
 
 fn splash_content(is_new_user: bool) -> String {
     if is_new_user {
-        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode\n- `/plasma` — configure background shader\n- `/plasma color` — pick shader colors\n- `/blend` — set text blend mode over shader\n- `/fullscreen` — toggle fullscreen (or F11)".to_string()
+        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/agent` — view or switch agent personality\n- `/shell` — view or switch app context\n- `/groups` — list MLS groups\n- `/invite <pubkey>` — invite to active group\n- `/join <group_id>` — accept a pending invite\n- `/members` — list group members\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode\n- `/plasma` — configure background shader\n- `/plasma color` — pick shader colors\n- `/blend` — set text blend mode over shader\n- `/fullscreen` — toggle fullscreen (or F11)".to_string()
     } else {
         "# *THOTH▷*".to_string()
     }
@@ -151,12 +152,7 @@ pub fn App() -> Element {
     let messages = use_signal_sync(|| Vec::<Message>::new());
     let next_id = use_signal_sync(|| 0u64);
     let mut is_loading = use_signal_sync(|| false);
-    let loading_state = use_signal_sync(|| {
-        #[cfg(target_arch = "wasm32")]
-        { LoadingState::Ready }
-        #[cfg(not(target_arch = "wasm32"))]
-        { LoadingState::Loading }
-    });
+    let loading_state = use_signal_sync(|| LoadingState::Ready);
     let input = use_signal(|| String::new());
     let mut at_bottom = use_signal(|| true);
     let mut has_new = use_signal(|| false);
@@ -170,6 +166,9 @@ pub fn App() -> Element {
             .map(|c| c.plasma.clone())
             .unwrap_or_default()
     });
+
+    let mut agent_manager = use_signal_sync(|| AgentManager::new());
+    let mut shell_manager = use_signal_sync(|| ShellManager::new());
 
     let net_runtime = use_signal_sync(|| {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -185,46 +184,76 @@ pub fn App() -> Element {
         let net = net_runtime.clone();
         spawn(async move {
             let rt = net.read().clone();
-        rt.set_event_callback({
-            let mut msgs = msgs.clone();
-            let mut nid = nid.clone();
-            move |ev: NetEvent| {
-                    match ev {
-                        NetEvent::NostrMessage { sender, content } => {
-                            let id = nid.peek().clone();
-                            nid.set(id + 1);
-                            msgs.with_mut(|v| v.push(Message {
-                                id,
-                                role: MessageRole::Peer,
-                                content,
-                                thinking: String::new(),
-                                kind: MessageKind::NostrDm { sender_pubkey: sender.clone() },
-                                sender,
-                                timestamp: now_secs(),
-                            }));
-                        }
-            NetEvent::DeviceDiscovered(caps) => {
+    let own_pk: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let own_pk_cb = own_pk.clone();
+    let own_pk_fetch = own_pk.clone();
+    rt.set_event_callback({
+        let mut msgs = msgs.clone();
+        let mut nid = nid.clone();
+        move |ev: NetEvent| {
+            match ev {
+                NetEvent::NostrMessage { sender, content } => {
+                    if let Ok(guard) = own_pk_cb.lock() {
+                        if guard.as_ref() == Some(&sender) { return; }
+                    }
                     let id = nid.peek().clone();
                     nid.set(id + 1);
-                    push_system_msg(&mut msgs, &mut nid, format!("Device discovered: {} (score={:.0})", caps.device_name, caps.score()), MessageKind::Text);
+                    msgs.with_mut(|v| v.push(Message {
+                        id,
+                        role: MessageRole::Peer,
+                        content: content.clone(),
+                        thinking: String::new(),
+                        kind: MessageKind::NostrDm { sender_pubkey: sender.clone() },
+                        sender: sender.chars().take(12).collect::<String>(),
+                        timestamp: now_secs(),
+                    }));
                 }
-                        _ => {}
+                    NetEvent::GroupText { sender, content, .. } => {
+                        let id = nid.peek().clone();
+                        nid.set(id + 1);
+                        msgs.with_mut(|v| v.push(Message {
+                            id,
+                            role: MessageRole::Peer,
+                            content,
+                            thinking: String::new(),
+                            kind: MessageKind::NostrDm { sender_pubkey: sender.clone() },
+                            sender: format!("peer:{}", sender.chars().take(8).collect::<String>()),
+                            timestamp: now_secs(),
+                        }));
                     }
-                }
-            });
-            match rt.start().await {
-                Ok(()) => {
-                    net_conn.set(true);
-                    push_system_msg(&mut msgs, &mut nid, "Connected to Nostr network.".to_string(), MessageKind::Text);
-                    if let Some(pk) = rt.public_key().await {
-                        push_system_msg(&mut msgs, &mut nid, format!("Your public key: `{}`", pk), MessageKind::Text);
+                    NetEvent::DeviceDiscovered(caps) => {
+                        push_system_msg(&mut msgs, &mut nid, format!("Device discovered: {} (score={:.0})", caps.device_name, caps.score()), MessageKind::Text);
                     }
-                }
-                Err(e) => {
-                    push_system_msg(&mut msgs, &mut nid, format!("Failed to connect: {}", e), MessageKind::Text);
+                    NetEvent::MlsInvite { sender, group_id, .. } => {
+                        push_system_msg(&mut msgs, &mut nid, format!("MLS invite from {} for group `{}`. Type `/join {}` to accept.", sender.chars().take(8).collect::<String>(), group_id, group_id), MessageKind::Text);
+                    }
+                    NetEvent::GroupJoined { group_id } => {
+                        push_system_msg(&mut msgs, &mut nid, format!("Joined MLS group `{}`", group_id), MessageKind::Text);
+                    }
+                    _ => {}
+            }
+        }
+    });
+    match rt.start().await {
+        Ok(()) => {
+                net_conn.set(true);
+                push_system_msg(&mut msgs, &mut nid, "Connected to Nostr network.".to_string(), MessageKind::Text);
+                if let Some(pk) = rt.public_key_hex().await {
+                    push_system_msg(&mut msgs, &mut nid, format!("Your public key: `{}`", pk), MessageKind::Text);
+                    if let Ok(mut guard) = own_pk_fetch.lock() {
+                        *guard = Some(pk.clone());
+                    }
+                    let caps = crate::net::relay_inference::local_device_caps(
+                        &crate::shared::get_hostname(), &pk, 0, None,
+                    );
+                    let _ = rt.advertise_caps(caps).await;
                 }
             }
-        })
+        Err(e) => {
+            push_system_msg(&mut msgs, &mut nid, format!("Failed to connect: {}", e), MessageKind::Text);
+        }
+    }
+})
     };
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -232,26 +261,81 @@ pub fn App() -> Element {
         let net = net_runtime.clone();
         let mut msgs = messages.clone();
         let mut nid = next_id.clone();
+        let mut net_conn = net_connected.clone();
         let rt = net.read().clone();
+        let own_pk: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let own_pk_cb = own_pk.clone();
+        let own_pk_fetch = own_pk.clone();
         rt.set_event_callback(move |ev: NetEvent| {
             match ev {
                 NetEvent::NostrMessage { sender, content } => {
+                    if let Ok(guard) = own_pk_cb.lock() {
+                        if guard.as_ref() == Some(&sender) { return; }
+                    }
                     let id = nid.peek().clone();
                     nid.set(id + 1);
                     msgs.with_mut(|v| v.push(Message {
                         id,
                         role: MessageRole::Peer,
-                        content,
+                        content: content.clone(),
                         thinking: String::new(),
                         kind: MessageKind::NostrDm { sender_pubkey: sender.clone() },
-                        sender,
+                        sender: sender.chars().take(12).collect::<String>(),
                         timestamp: now_secs(),
                     }));
                 }
-                NetEvent::DeviceDiscovered(caps) => {
-                    push_system_msg(&mut msgs, &mut nid, format!("Device discovered: {} (score={:.0})", caps.device_name, caps.score()), MessageKind::Text);
+            NetEvent::GroupText { sender, content, .. } => {
+                let id = nid.peek().clone();
+                nid.set(id + 1);
+                msgs.with_mut(|v| v.push(Message {
+                    id,
+                    role: MessageRole::Peer,
+                    content,
+                    thinking: String::new(),
+                    kind: MessageKind::NostrDm { sender_pubkey: sender.clone() },
+                    sender: format!("peer:{}", sender.chars().take(8).collect::<String>()),
+                    timestamp: now_secs(),
+                }));
+            }
+            NetEvent::DeviceDiscovered(caps) => {
+                push_system_msg(&mut msgs, &mut nid, format!("Device discovered: {} (score={:.0})", caps.device_name, caps.score()), MessageKind::Text);
+            }
+            NetEvent::MlsInvite { sender, group_id, .. } => {
+                push_system_msg(&mut msgs, &mut nid, format!("MLS invite from {} for group `{}`. Type `/join {}` to accept.", sender.chars().take(8).collect::<String>(), group_id, group_id), MessageKind::Text);
+            }
+            NetEvent::GroupJoined { group_id } => {
+                push_system_msg(&mut msgs, &mut nid, format!("Joined MLS group `{}`", group_id), MessageKind::Text);
+            }
+            _ => {}
+            }
+        });
+        let rt_start = rt.clone();
+        tokio::spawn(async move {
+            match rt_start.start().await {
+        Ok(()) => {
+                net_conn.set(true);
+                push_system_msg(&mut msgs, &mut nid, "Connected to Nostr network.".to_string(), MessageKind::Text);
+                if let Some(pk) = rt_start.public_key_hex().await {
+                    push_system_msg(&mut msgs, &mut nid, format!("Your public key: `{}`", pk), MessageKind::Text);
+                    if let Ok(mut guard) = own_pk_fetch.lock() {
+                        *guard = Some(pk.clone());
+                    }
+                    let gpu: u32 = {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        { 99 }
+                        #[cfg(target_arch = "wasm32")]
+                        { 0 }
+                    };
+                    let model: Option<String> = None;
+                    let caps = crate::net::relay_inference::local_device_caps(
+                        &crate::shared::get_hostname(), &pk, gpu, model,
+                    );
+                    let _ = rt_start.advertise_caps(caps).await;
                 }
-                _ => {}
+                }
+                Err(e) => {
+                    push_system_msg(&mut msgs, &mut nid, format!("Failed to connect: {}", e), MessageKind::Text);
+                }
             }
         });
     };
@@ -474,6 +558,10 @@ let mut process_input = {
     let tool_engine_c = tool_engine.clone();
     let sp = system_prompt.clone();
     let pc = plasma_config.clone();
+    let net = net_runtime.clone();
+    let ls = loading_state.clone();
+    let am = agent_manager.clone();
+    let sm = shell_manager.clone();
     move |input: String| {
         let mut msgs = msgs;
         let mut nid = nid;
@@ -483,7 +571,9 @@ let mut process_input = {
         let mut facts_sig = facts_sig;
         let tool_engine = tool_engine_c;
         let mut plasma_cfg = pc;
-            let mut system_prompt_sig = sp;
+        let mut system_prompt_sig = sp;
+        let mut agent_mgr = am;
+        let mut shell_mgr = sm;
         let mut plasma_cfg = plasma_cfg;
         let trimmed = input.trim().to_string();
             if trimmed.is_empty() { return; }
@@ -660,9 +750,175 @@ return;
                     thinking: String::new(), kind: MessageKind::Text, sender: String::new(),
             timestamp: now_secs(),
                 }));
-            }
-            return;
         }
+        return;
+    }
+
+    if trimmed.starts_with("/agent") {
+        let rest = trimmed["/agent".len()..].trim();
+        if rest.is_empty() || rest == "show" {
+            let entries = agent_mgr.read().list_display();
+            let mut lines = vec!["**Agents:**\n".to_string()];
+            for (name, desc, active) in &entries {
+                let marker = if *active { " ◀" } else { "" };
+                lines.push(format!("- **{name}** — {desc}{marker}"));
+            }
+            lines.push("\nUsage: `/agent <name>` to switch".to_string());
+            push_system_msg(&mut msgs, &mut nid, lines.join("\n"), MessageKind::Text);
+        } else if let Ok(agent) = agent_mgr.write().switch(rest) {
+            system_prompt_sig.set(agent.system_prompt.clone());
+            push_system_msg(&mut msgs, &mut nid, format!("Switched to agent **{}** ({})", agent.agent_name, agent.name), MessageKind::Text);
+        } else {
+            push_system_msg(&mut msgs, &mut nid, format!("Unknown agent: `{}`. Type `/agent` to see available.", rest), MessageKind::Text);
+        }
+        return;
+    }
+
+    if trimmed.starts_with("/shell") {
+        let rest = trimmed["/shell".len()..].trim();
+        if rest.is_empty() || rest == "show" {
+            let entries = shell_mgr.read().list_display();
+            let mut lines = vec!["**App Shells:**\n".to_string()];
+            for (name, desc, icon, active) in &entries {
+                let marker = if *active { " ◀" } else { "" };
+                lines.push(format!("- {icon} **{name}** — {desc}{marker}"));
+            }
+            lines.push("\nUsage: `/shell <name>` to switch".to_string());
+            push_system_msg(&mut msgs, &mut nid, lines.join("\n"), MessageKind::Text);
+        } else if let Ok(shell) = shell_mgr.write().switch(rest) {
+            let agent = agent_mgr.read().active().clone();
+            if let Some(a) = agent_mgr.read().agents.get(&shell.agent) {
+                system_prompt_sig.set(a.system_prompt.clone());
+            }
+            push_system_msg(&mut msgs, &mut nid, format!("Switched to {icon} **{name}** — {desc}", icon=shell.icon, name=shell.name, desc=shell.description), MessageKind::Text);
+        } else {
+            push_system_msg(&mut msgs, &mut nid, format!("Unknown shell: `{}`. Type `/shell` to see available.", rest), MessageKind::Text);
+        }
+        return;
+    }
+
+    if trimmed.starts_with("/invite") {
+        let rest = trimmed["/invite".len()..].trim();
+        if rest.is_empty() {
+            push_system_msg(&mut msgs, &mut nid, "Usage: `/invite <pubkey_hex>` — invite user to the active shell's MLS group".to_string(), MessageKind::Text);
+        } else {
+            let active_shell = shell_mgr.read().active().clone();
+            let group_id = active_shell.channels.first().cloned().unwrap_or_else(|| "devices".to_string());
+            let net_c = net.clone();
+            let gid = group_id.clone();
+            let pk = rest.to_string();
+            let mut ms_inv = msgs.clone();
+            let mut nid_inv = nid.clone();
+            spawn(async move {
+                let rt = net_c.read().clone();
+                if rt.is_running().await {
+                    match rt.invite_to_group(&gid, &pk).await {
+                        Ok(()) => {
+                            push_system_msg(&mut ms_inv, &mut nid_inv, format!("Invited `{}` to group `{}`", pk.chars().take(12).collect::<String>(), gid), MessageKind::Text);
+                        }
+                        Err(e) => {
+                            push_system_msg(&mut ms_inv, &mut nid_inv, format!("Invite failed: {}", e), MessageKind::Text);
+                        }
+                    }
+                } else {
+                    push_system_msg(&mut ms_inv, &mut nid_inv, "Not connected to Nostr.".to_string(), MessageKind::Text);
+                }
+            });
+        }
+        return;
+    }
+
+    if trimmed.starts_with("/join") {
+        let rest = trimmed["/join".len()..].trim();
+        if rest.is_empty() {
+            let net_c = net.clone();
+            let mut ms_j = msgs.clone();
+            let mut nid_j = nid.clone();
+            spawn(async move {
+                let rt = net_c.read().clone();
+                let invites = rt.pending_invites().await;
+                if invites.is_empty() {
+                    push_system_msg(&mut ms_j, &mut nid_j, "No pending MLS invites. Someone must `/invite` you first.".to_string(), MessageKind::Text);
+                } else {
+                    let mut lines = vec!["**Pending invites:**\n".to_string()];
+                    for inv in &invites {
+                        lines.push(format!("- Group `{}` from `{}` (received {})", inv.group_id, inv.sender.chars().take(8).collect::<String>(), inv.received_at));
+                    }
+                    lines.push("\nUsage: `/join <group_id>` to accept".to_string());
+                    push_system_msg(&mut ms_j, &mut nid_j, lines.join("\n"), MessageKind::Text);
+                }
+            });
+        } else {
+            let net_c = net.clone();
+            let gid = rest.to_string();
+            let mut ms_j = msgs.clone();
+            let mut nid_j = nid.clone();
+            spawn(async move {
+                let rt = net_c.read().clone();
+                match rt.join_pending_invite(&gid).await {
+                    Ok(joined_id) => {
+                        push_system_msg(&mut ms_j, &mut nid_j, format!("Joined MLS group `{}`", joined_id), MessageKind::Text);
+                    }
+                    Err(e) => {
+                        push_system_msg(&mut ms_j, &mut nid_j, format!("Join failed: {}", e), MessageKind::Text);
+                    }
+                }
+            });
+        }
+        return;
+    }
+
+    if trimmed == "/members" {
+        let active_shell = shell_mgr.read().active().clone();
+        let group_id = active_shell.channels.first().cloned().unwrap_or_else(|| "devices".to_string());
+        let net_c = net.clone();
+        let gid = group_id.clone();
+        let mut ms_m = msgs.clone();
+        let mut nid_m = nid.clone();
+        spawn(async move {
+            let rt = net_c.read().clone();
+            match rt.get_group_members(&gid).await {
+                Ok(members) => {
+                    if members.is_empty() {
+                        push_system_msg(&mut ms_m, &mut nid_m, format!("No members found in group `{}`.", gid), MessageKind::Text);
+                    } else {
+                        let list: Vec<String> = members.iter().map(|m| format!("- `{}`", m.chars().take(12).collect::<String>())).collect();
+                        push_system_msg(&mut ms_m, &mut nid_m, format!("**Members of `{}`:**\n{}", gid, list.join("\n")), MessageKind::Text);
+                    }
+                }
+                Err(e) => {
+                    push_system_msg(&mut ms_m, &mut nid_m, format!("Error: {}", e), MessageKind::Text);
+                }
+            }
+        });
+        return;
+    }
+
+    if trimmed == "/groups" {
+        let net_c = net.clone();
+        let mut ms_g = msgs.clone();
+        let mut nid_g = nid.clone();
+        spawn(async move {
+            let rt = net_c.read().clone();
+            let groups = rt.list_groups().await;
+            if groups.is_empty() {
+                push_system_msg(&mut ms_g, &mut nid_g, "No MLS groups yet. Use `/invite` to add members or switch to a shell with `/shell`.".to_string(), MessageKind::Text);
+            } else {
+                let mut lines = vec!["**MLS Groups:**\n".to_string()];
+                for g in &groups {
+                    let type_label = match &g.group_type {
+                        crate::net::group_registry::GroupType::Device => "device",
+                        crate::net::group_registry::GroupType::Chat => "chat",
+                        crate::net::group_registry::GroupType::Shell { shell_name } => shell_name,
+                    };
+                    lines.push(format!("- `{}` [{}] {} members — {}", g.group_id, type_label, g.members.len(), g.name));
+                }
+                push_system_msg(&mut ms_g, &mut nid_g, lines.join("\n"), MessageKind::Text);
+            }
+        });
+        return;
+    }
+
     if trimmed == "/clear" {
         let h = handle.read().clone();
         let _ = llama::clear_kv(&h);
@@ -685,7 +941,61 @@ return;
         return;
     }
 
-            // Backup and login commands
+        if trimmed == "/relays" {
+            let net = net.clone();
+            let mut msgs = msgs.clone();
+            let mut nid = nid.clone();
+            spawn(async move {
+                let rt = net.read().clone();
+                let statuses = rt.relay_statuses().await;
+                let mut lines = vec!["**Nostr Relay Status:**\n".to_string()];
+                for (url, status) in &statuses {
+                    let icon = if status == "connected" { "\u{2705}" } else { "\u{274c}" };
+                    lines.push(format!("{} `{}` — {}", icon, url, status));
+                }
+                if statuses.is_empty() {
+                    lines.push("No relays configured.".to_string());
+                }
+                push_system_msg(&mut msgs, &mut nid, lines.join("\n"), MessageKind::Text);
+            });
+            return;
+        }
+
+        if trimmed.starts_with("/relay_add ") {
+            let url = trimmed["/relay_add ".len()..].trim().to_string();
+            if !url.is_empty() {
+                let net = net.clone();
+                let mut msgs = msgs.clone();
+                let mut nid = nid.clone();
+                spawn(async move {
+                    let rt = net.read().clone();
+                    match rt.add_relay(&url).await {
+                        Ok(()) => { push_system_msg(&mut msgs, &mut nid, format!("Added relay: `{url}`"), MessageKind::Text); }
+                        Err(e) => { push_system_msg(&mut msgs, &mut nid, format!("Failed to add relay: {e}"), MessageKind::Text); }
+                    }
+                });
+            }
+            return;
+        }
+
+        if trimmed.starts_with("/relay_rm ") {
+            let url = trimmed["/relay_rm ".len()..].trim().to_string();
+            if !url.is_empty() {
+                let net = net.clone();
+                let mut msgs = msgs.clone();
+                let mut nid = nid.clone();
+                spawn(async move {
+                    let rt = net.read().clone();
+                    match rt.remove_relay(&url).await {
+                        Ok(()) => { push_system_msg(&mut msgs, &mut nid, format!("Removed relay: `{url}`"), MessageKind::Text); }
+                        Err(e) => { push_system_msg(&mut msgs, &mut nid, format!("Failed to remove relay: {e}"), MessageKind::Text); }
+                    }
+                });
+            }
+            return;
+        }
+
+        // Backup and login commands
             if trimmed == "/backup" {
                 let path = config::get_config_path();
                 match AppConfig::load(&path) {
@@ -827,22 +1137,63 @@ return;
         return;
         }
 
-        let uid = nid();
-        nid.set(uid + 1);
-        let user_msg = Message { id: uid, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text, sender: "You".to_string(), timestamp: now_secs() };
+    let uid = nid();
+    nid.set(uid + 1);
+    let user_msg = Message { id: uid, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text, sender: "You".to_string(), timestamp: now_secs() };
     msgs.with_mut(|v| v.push(user_msg.clone()));
     memh.read().clone().append_message(ChatMessage::from_shared(&user_msg));
 
     extract_facts(&trimmed, facts_sig.clone(), &memh);
 
-        let aid = nid();
-        nid.set(aid + 1);
-        let asst_msg = Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text, sender: "Tot".to_string(), timestamp: now_secs() };
-        msgs.with_mut(|v| v.push(asst_msg.clone()));
+    let active_shell = shell_mgr.read().active().clone();
 
-        il.set(true);
-        let h = handle.read().clone();
-        let msgs_snapshot: Vec<(MessageRole, String, String)> = msgs.read().iter()
+    match active_shell.publish_mode {
+        crate::system::app_shell::PublishMode::Public => {
+            let net_c = net.clone();
+            let content = trimmed.clone();
+            spawn(async move {
+                let rt = net_c.read().clone();
+                if rt.is_running().await {
+                    if let Err(e) = rt.publish_text_note(content).await {
+                        tracing::warn!("Failed to publish to Nostr: {}", e);
+                    }
+                }
+            });
+        }
+        crate::system::app_shell::PublishMode::Private => {
+            let net_c = net.clone();
+            let content = trimmed.clone();
+            let shell_name = shell_mgr.read().active().name.clone();
+            spawn(async move {
+                let rt = net_c.read().clone();
+                if rt.is_running().await {
+                    if let Some(pk) = rt.own_pubkey().await {
+                        if let Err(e) = rt.send_shell_text(&pk, &shell_name, content).await {
+                            tracing::warn!("Failed to send MLS group text: {}", e);
+                        }
+                    }
+                }
+            });
+        }
+        crate::system::app_shell::PublishMode::Local => {}
+    }
+
+    // @Tot prefix triggers local inference (private, never published)
+        if trimmed.to_lowercase().starts_with("@tot ") {
+            let query = trimmed[5..].trim().to_string();
+            if query.is_empty() {
+                push_system_msg(&mut msgs, &mut nid, "Usage: `@Tot <your question>`".to_string(), MessageKind::Text);
+            } else if ls.read().clone() != LoadingState::Ready {
+                push_system_msg(&mut msgs, &mut nid, "Model not loaded yet. Wait for it to finish loading, or check the model path.".to_string(), MessageKind::Text);
+        } else {
+                let aid = nid();
+                nid.set(aid + 1);
+                let asst_msg = Message { id: aid, role: MessageRole::Assistant, content: String::new(), thinking: String::new(), kind: MessageKind::Text, sender: "Tot".to_string(), timestamp: now_secs() };
+                msgs.with_mut(|v| v.push(asst_msg.clone()));
+
+                il.set(true);
+                let h = handle.read().clone();
+                let msgs_snapshot: Vec<(MessageRole, String, String)> = msgs.read().iter()
             .filter(|m| (m.role == MessageRole::User || m.role == MessageRole::Assistant) && !m.content.is_empty())
             .map(|m| (m.role.clone(), m.content.clone(), m.thinking.clone()))
             .collect();
@@ -908,6 +1259,7 @@ return;
         let memh_inf = memh.read().clone();
         let tool_eng = tool_engine.read().clone();
         let h_tool = handle.read().clone();
+        let net_resp = net.clone();
         tokio::spawn(async move {
             let mut ms = msgs;
             let mut il = il;
@@ -1078,6 +1430,10 @@ return;
                             let final_msg2 = ms.read().iter().find(|m| m.id == aid2).cloned();
                             if let Some(msg) = final_msg2 {
                                 memh_inf.append_message(ChatMessage::from_shared(&msg));
+                                let rt = net_resp.read().clone();
+                                if rt.is_running().await {
+                                    let _ = rt.publish_text_note(msg.content.clone()).await;
+                                }
                             }
                         }
                         Err(e) => {
@@ -1088,12 +1444,16 @@ return;
                             });
                         }
                     }
-                } else {
-                    let final_msg = ms.read().iter().find(|m| m.id == aid).cloned();
-                    if let Some(msg) = final_msg {
-                        memh_inf.append_message(ChatMessage::from_shared(&msg));
+                    } else {
+                        let final_msg = ms.read().iter().find(|m| m.id == aid).cloned();
+                        if let Some(msg) = final_msg {
+                            memh_inf.append_message(ChatMessage::from_shared(&msg));
+                            let rt = net_resp.read().clone();
+                            if rt.is_running().await {
+                                let _ = rt.publish_text_note(msg.content.clone()).await;
+                            }
+                        }
                     }
-                }
             }
                     Err(e) => {
                         ms.with_mut(|v| {
@@ -1103,8 +1463,10 @@ return;
                         });
                     }
         }
-        il.set(false);
-    });
+            il.set(false);
+            });
+            }
+            }
         }
     };
 
@@ -1125,23 +1487,27 @@ return;
     }
 }
 
-    #[cfg(target_arch = "wasm32")]
-    let mut process_input = {
-        let msgs = messages.clone();
-        let nid = next_id.clone();
-        let il = is_loading.clone();
-        let t = theme.clone();
-        let sp = system_prompt.clone();
-        let mut pc = plasma_config.clone();
-        let net = net_runtime.clone();
-        let net_conn = net_connected.clone();
-        move |input: String| {
-            let mut msgs = msgs;
-            let mut nid = nid;
-            let mut il = il;
-            let mut t = t;
-            let mut system_prompt_sig = sp;
-            let mut plasma_cfg = pc;
+#[cfg(target_arch = "wasm32")]
+let mut process_input = {
+    let msgs = messages.clone();
+    let nid = next_id.clone();
+    let il = is_loading.clone();
+    let t = theme.clone();
+    let sp = system_prompt.clone();
+    let mut pc = plasma_config.clone();
+    let net = net_runtime.clone();
+    let net_conn = net_connected.clone();
+    let am = agent_manager.clone();
+    let sm = shell_manager.clone();
+    move |input: String| {
+        let mut msgs = msgs;
+        let mut nid = nid;
+        let mut il = il;
+        let mut t = t;
+        let mut system_prompt_sig = sp;
+        let mut plasma_cfg = pc;
+        let mut agent_mgr = am;
+        let mut shell_mgr = sm;
         let trimmed = input.trim().to_string();
         if trimmed.is_empty() { return; }
 
@@ -1241,12 +1607,173 @@ return;
                 system_prompt_sig.set(rest.to_string());
                 push_system_msg(&mut msgs, &mut nid, format!("System prompt updated:\n```\n{}\n```", rest), MessageKind::Text);
             }
-            return;
+        return;
+    }
+
+    if trimmed.starts_with("/agent") {
+        let rest = trimmed["/agent".len()..].trim();
+        if rest.is_empty() || rest == "show" {
+            let entries = agent_mgr.read().list_display();
+            let mut lines = vec!["**Agents:**\n".to_string()];
+            for (name, desc, active) in &entries {
+                let marker = if *active { " ◀" } else { "" };
+                lines.push(format!("- **{name}** — {desc}{marker}"));
+            }
+            lines.push("\nUsage: `/agent <name>` to switch".to_string());
+            push_system_msg(&mut msgs, &mut nid, lines.join("\n"), MessageKind::Text);
+        } else if let Ok(agent) = agent_mgr.write().switch(rest) {
+            system_prompt_sig.set(agent.system_prompt.clone());
+            push_system_msg(&mut msgs, &mut nid, format!("Switched to agent **{}** ({})", agent.agent_name, agent.name), MessageKind::Text);
+        } else {
+            push_system_msg(&mut msgs, &mut nid, format!("Unknown agent: `{}`. Type `/agent` to see available.", rest), MessageKind::Text);
         }
-        if trimmed == "/clear" {
-            msgs.set(Vec::new());
-            let msg_id = nid();
-            nid.set(msg_id + 1);
+        return;
+    }
+
+    if trimmed.starts_with("/shell") {
+        let rest = trimmed["/shell".len()..].trim();
+        if rest.is_empty() || rest == "show" {
+            let entries = shell_mgr.read().list_display();
+            let mut lines = vec!["**App Shells:**\n".to_string()];
+            for (name, desc, icon, active) in &entries {
+                let marker = if *active { " ◀" } else { "" };
+                lines.push(format!("- {icon} **{name}** — {desc}{marker}"));
+            }
+            lines.push("\nUsage: `/shell <name>` to switch".to_string());
+            push_system_msg(&mut msgs, &mut nid, lines.join("\n"), MessageKind::Text);
+        } else if let Ok(shell) = shell_mgr.write().switch(rest) {
+            if let Some(a) = agent_mgr.read().agents.get(&shell.agent) {
+                system_prompt_sig.set(a.system_prompt.clone());
+            }
+        push_system_msg(&mut msgs, &mut nid, format!("Switched to {icon} **{name}** — {desc}", icon=shell.icon, name=shell.name, desc=shell.description), MessageKind::Text);
+        } else {
+            push_system_msg(&mut msgs, &mut nid, format!("Unknown shell: `{}`. Type `/shell` to see available.", rest), MessageKind::Text);
+        }
+        return;
+    }
+
+    if trimmed.starts_with("/invite") {
+        let rest = trimmed["/invite".len()..].trim();
+        if rest.is_empty() {
+            push_system_msg(&mut msgs, &mut nid, "Usage: `/invite <pubkey_hex>` — invite user to the active shell's MLS group".to_string(), MessageKind::Text);
+        } else {
+            let active_shell = shell_mgr.read().active().clone();
+            let group_id = active_shell.channels.first().cloned().unwrap_or_else(|| "devices".to_string());
+            let rt = net.read().clone();
+            let gid = group_id;
+            let pk = rest.to_string();
+            let mut ms_inv = msgs.clone();
+            let mut nid_inv = nid.clone();
+            let connected = net_conn.peek().clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if connected && rt.is_running().await {
+                    match rt.invite_to_group(&gid, &pk).await {
+                        Ok(()) => {
+                            push_system_msg(&mut ms_inv, &mut nid_inv, format!("Invited `{}` to group `{}`", pk.chars().take(12).collect::<String>(), gid), MessageKind::Text);
+                        }
+                        Err(e) => {
+                            push_system_msg(&mut ms_inv, &mut nid_inv, format!("Invite failed: {}", e), MessageKind::Text);
+                        }
+                    }
+                } else {
+                    push_system_msg(&mut ms_inv, &mut nid_inv, "Not connected to Nostr.".to_string(), MessageKind::Text);
+                }
+            });
+        }
+        return;
+    }
+
+    if trimmed.starts_with("/join") {
+        let rest = trimmed["/join".len()..].trim();
+        if rest.is_empty() {
+            let rt = net.read().clone();
+            let mut ms_j = msgs.clone();
+            let mut nid_j = nid.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let invites = rt.pending_invites().await;
+                if invites.is_empty() {
+                    push_system_msg(&mut ms_j, &mut nid_j, "No pending MLS invites. Someone must `/invite` you first.".to_string(), MessageKind::Text);
+                } else {
+                    let mut lines = vec!["**Pending invites:**\n".to_string()];
+                    for inv in &invites {
+                        lines.push(format!("- Group `{}` from `{}` (received {})", inv.group_id, inv.sender.chars().take(8).collect::<String>(), inv.received_at));
+                    }
+                    lines.push("\nUsage: `/join <group_id>` to accept".to_string());
+                    push_system_msg(&mut ms_j, &mut nid_j, lines.join("\n"), MessageKind::Text);
+                }
+            });
+        } else {
+            let rt = net.read().clone();
+            let gid = rest.to_string();
+            let mut ms_j = msgs.clone();
+            let mut nid_j = nid.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match rt.join_pending_invite(&gid).await {
+                    Ok(joined_id) => {
+                        push_system_msg(&mut ms_j, &mut nid_j, format!("Joined MLS group `{}`", joined_id), MessageKind::Text);
+                    }
+                    Err(e) => {
+                        push_system_msg(&mut ms_j, &mut nid_j, format!("Join failed: {}", e), MessageKind::Text);
+                    }
+                }
+            });
+        }
+        return;
+    }
+
+    if trimmed == "/members" {
+        let active_shell = shell_mgr.read().active().clone();
+        let group_id = active_shell.channels.first().cloned().unwrap_or_else(|| "devices".to_string());
+        let rt = net.read().clone();
+        let gid = group_id;
+        let mut ms_m = msgs.clone();
+        let mut nid_m = nid.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match rt.get_group_members(&gid).await {
+                Ok(members) => {
+                    if members.is_empty() {
+                        push_system_msg(&mut ms_m, &mut nid_m, format!("No members found in group `{}`.", gid), MessageKind::Text);
+                    } else {
+                        let list: Vec<String> = members.iter().map(|m| format!("- `{}`", m.chars().take(12).collect::<String>())).collect();
+                        push_system_msg(&mut ms_m, &mut nid_m, format!("**Members of `{}`:**\n{}", gid, list.join("\n")), MessageKind::Text);
+                    }
+                }
+                Err(e) => {
+                    push_system_msg(&mut ms_m, &mut nid_m, format!("Error: {}", e), MessageKind::Text);
+                }
+            }
+        });
+        return;
+    }
+
+    if trimmed == "/groups" {
+        let rt = net.read().clone();
+        let mut ms_g = msgs.clone();
+        let mut nid_g = nid.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let groups = rt.list_groups().await;
+            if groups.is_empty() {
+                push_system_msg(&mut ms_g, &mut nid_g, "No MLS groups yet. Use `/invite` to add members or switch to a shell with `/shell`.".to_string(), MessageKind::Text);
+            } else {
+                let mut lines = vec!["**MLS Groups:**\n".to_string()];
+                for g in &groups {
+                    let type_label = match &g.group_type {
+                        crate::net::group_registry::GroupType::Device => "device",
+                        crate::net::group_registry::GroupType::Chat => "chat",
+                        crate::net::group_registry::GroupType::Shell { shell_name } => shell_name,
+                    };
+                    lines.push(format!("- `{}` [{}] {} members — {}", g.group_id, type_label, g.members.len(), g.name));
+                }
+                push_system_msg(&mut ms_g, &mut nid_g, lines.join("\n"), MessageKind::Text);
+            }
+        });
+        return;
+    }
+
+    if trimmed == "/clear" {
+        msgs.set(Vec::new());
+        let msg_id = nid();
+        nid.set(msg_id + 1);
             msgs.with_mut(|v| v.push(Message {
                 id: msg_id, role: MessageRole::System,
                 content: splash_content(false),
@@ -1295,7 +1822,58 @@ return;
             }
             return;
         }
-            if trimmed.starts_with("/dm ") {
+            if trimmed == "/relays" {
+            let rt = net.read().clone();
+            let mut ms = msgs.clone();
+            let mut nid_c = nid.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let statuses = rt.relay_statuses().await;
+                let mut lines = vec!["**Nostr Relay Status:**\n".to_string()];
+                for (url, status) in &statuses {
+                    let icon = if status == "connected" { "\u{2705}" } else { "\u{274c}" };
+                    lines.push(format!("{} `{}` — {}", icon, url, status));
+                }
+                if statuses.is_empty() {
+                    lines.push("No relays configured.".to_string());
+                }
+                push_system_msg(&mut ms, &mut nid_c, lines.join("\n"), MessageKind::Text);
+            });
+            return;
+        }
+
+        if trimmed.starts_with("/relay_add ") {
+            let url = trimmed["/relay_add ".len()..].trim().to_string();
+            if !url.is_empty() {
+                let rt = net.read().clone();
+                let mut ms = msgs.clone();
+                let mut nid_c = nid.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match rt.add_relay(&url).await {
+                        Ok(()) => { push_system_msg(&mut ms, &mut nid_c, format!("Added relay: `{url}`"), MessageKind::Text); }
+                        Err(e) => { push_system_msg(&mut ms, &mut nid_c, format!("Failed to add relay: {e}"), MessageKind::Text); }
+                    }
+                });
+            }
+            return;
+        }
+
+        if trimmed.starts_with("/relay_rm ") {
+            let url = trimmed["/relay_rm ".len()..].trim().to_string();
+            if !url.is_empty() {
+                let rt = net.read().clone();
+                let mut ms = msgs.clone();
+                let mut nid_c = nid.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    match rt.remove_relay(&url).await {
+                        Ok(()) => { push_system_msg(&mut ms, &mut nid_c, format!("Removed relay: `{url}`"), MessageKind::Text); }
+                        Err(e) => { push_system_msg(&mut ms, &mut nid_c, format!("Failed to remove relay: {e}"), MessageKind::Text); }
+                    }
+                });
+            }
+            return;
+        }
+
+        if trimmed.starts_with("/dm ") {
                 let rest = trimmed["/dm ".len()..].trim();
                 let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
                 if parts.len() < 2 || parts[0].is_empty() || parts[1].is_empty() {
@@ -1327,97 +1905,138 @@ return;
                 });
                 return;
             }
-            if trimmed.starts_with('/') {
+        if trimmed.starts_with('/') {
             push_system_msg(&mut msgs, &mut nid, format!("Unknown command: `{trimmed}`"), MessageKind::Text);
             return;
         }
 
-        il.set(true);
-        let uid = nid();
-        nid.set(uid + 1);
-        msgs.with_mut(|v| v.push(Message {
-            id: uid, role: MessageRole::User, content: trimmed.clone(),
-            thinking: String::new(), kind: MessageKind::Text,
-            sender: String::new(),
-            timestamp: now_secs(),
-        }));
-
-        let aid = nid();
-        nid.set(aid + 1);
-        msgs.with_mut(|v| v.push(Message {
-            id: aid, role: MessageRole::Assistant, content: String::new(),
-            thinking: String::new(), kind: MessageKind::Text,
-            sender: String::new(),
-            timestamp: now_secs(),
-        }));
-
-        let current_sp = system_prompt_sig.read().clone();
-        let rt = net.read().clone();
-        let connected = net_conn.peek().clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let mut ms = msgs;
-            let mut il = il;
-
-            if !connected {
-                ms.with_mut(|v| {
-                    if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                        msg.content = "Not connected to Nostr yet. Waiting for connection...".to_string();
-                    }
-                });
-                il.set(false);
+        // @Tot prefix sends inference request to remote device
+        if trimmed.to_lowercase().starts_with("@tot ") {
+            let query = trimmed[5..].trim().to_string();
+            if query.is_empty() {
+                push_system_msg(&mut msgs, &mut nid, "Usage: `@Tot <your question>`".to_string(), MessageKind::Text);
                 return;
             }
-
-            let req = InferenceRequest {
-                request_id: format!("web-{}", next_msg_id()),
-                prompt_segments: vec![trimmed.clone()],
-                system_prompt: current_sp,
-                model_hint: None,
-                max_tokens: Some(512),
-                temperature: Some(0.5),
-            };
-
-            match rt.send_inference_request(req).await {
-                Ok(rx) => {
+            il.set(true);
+            let uid = nid();
+            nid.set(uid + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: uid, role: MessageRole::User, content: query.clone(),
+                thinking: String::new(), kind: MessageKind::Text,
+                sender: "You".to_string(), timestamp: now_secs(),
+            }));
+            let aid = nid();
+            nid.set(aid + 1);
+            msgs.with_mut(|v| v.push(Message {
+                id: aid, role: MessageRole::Assistant, content: String::new(),
+                thinking: String::new(), kind: MessageKind::Text,
+                sender: "Tot".to_string(), timestamp: now_secs(),
+            }));
+            let current_sp = system_prompt_sig.read().clone();
+            let rt = net.read().clone();
+            let connected = net_conn.peek().clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let mut ms = msgs;
+                let mut il = il;
+                if !connected {
                     ms.with_mut(|v| {
                         if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                            msg.content = "_waiting for device..._".to_string();
+                            msg.content = "Not connected to Nostr yet. Waiting for connection...".to_string();
                         }
                     });
-                    match rx.await {
-                        Ok(resp) => {
-                            ms.with_mut(|v| {
-                                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                                    if !resp.thinking.is_empty() {
-                                        msg.thinking = resp.thinking;
+                    il.set(false);
+                    return;
+                }
+                let req = InferenceRequest {
+                    request_id: format!("web-{}", next_msg_id()),
+                    prompt_segments: vec![query.clone()],
+                    system_prompt: current_sp,
+                    model_hint: None,
+                    max_tokens: Some(512),
+                    temperature: Some(0.5),
+                };
+                match rt.send_inference_request(req).await {
+                    Ok(rx) => {
+                        ms.with_mut(|v| {
+                            if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                msg.content = "_waiting for device..._".to_string();
+                            }
+                        });
+                        match rx.await {
+                            Ok(resp) => {
+                                ms.with_mut(|v| {
+                                    if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                        if !resp.thinking.is_empty() {
+                                            msg.thinking = resp.thinking;
+                                        }
+                                        msg.content = resp.content;
                                     }
-                                    msg.content = resp.content;
-                                }
-                            });
+                                });
+                            }
+                            Err(_) => {
+                                ms.with_mut(|v| {
+                                    if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                        msg.content = "Inference request timed out.".to_string();
+                                    }
+                                });
+                            }
                         }
-                        Err(_) => {
-                            ms.with_mut(|v| {
-                                if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                                    msg.content = "Inference request timed out.".to_string();
-                                }
-                            });
+                    }
+                    Err(e) => {
+                        ms.with_mut(|v| {
+                            if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
+                                msg.content = format!("No device available: {}", e);
+                            }
+                        });
+                    }
+                }
+                il.set(false);
+            });
+            return;
+        }
+
+        // Regular message: dispatch by active shell publish_mode
+        let uid = nid();
+        nid.set(uid + 1);
+        msgs.with_mut(|v| v.push(Message { id: uid, role: MessageRole::User, content: trimmed.clone(), thinking: String::new(), kind: MessageKind::Text, sender: "You".to_string(), timestamp: now_secs() }));
+
+        let active_shell = shell_mgr.read().active().clone();
+        match active_shell.publish_mode {
+            crate::system::app_shell::PublishMode::Public => {
+                let rt = net.read().clone();
+                let connected = net_conn.peek().clone();
+                let mut ms_pub = msgs.clone();
+                let mut nid_pub = nid.clone();
+                let content = trimmed.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if connected {
+                        let _ = rt.publish_text_note(content).await;
+                    } else {
+                        push_system_msg(&mut ms_pub, &mut nid_pub, "Not connected to Nostr. Message not sent.".to_string(), MessageKind::Text);
+                    }
+                });
+            }
+        crate::system::app_shell::PublishMode::Private => {
+            let rt = net.read().clone();
+            let content = trimmed.clone();
+            let shell_name = shell_mgr.read().active().name.clone();
+            let connected = net_conn.peek().clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if connected && rt.is_running().await {
+                    if let Some(pk) = rt.own_pubkey().await {
+                        if let Err(e) = rt.send_shell_text(&pk, &shell_name, content).await {
+                            tracing::warn!("Failed to send MLS group text: {}", e);
                         }
                     }
                 }
-                Err(e) => {
-                    ms.with_mut(|v| {
-                        if let Some(msg) = v.iter_mut().find(|m| m.id == aid) {
-                            msg.content = format!("No device available: {}", e);
-                        }
-                    });
-                }
-            }
-            il.set(false);
-        });
+            });
+        }
+            crate::system::app_shell::PublishMode::Local => {}
+        }
     }
 };
 
-    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     let mut is_fullscreen = use_signal(|| false);
 
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]

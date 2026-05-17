@@ -15,8 +15,12 @@ pub struct AppConfig {
     pub theme: String,
     #[serde(default)]
     pub plasma: PlasmaConfig,
+    #[serde(default = "default_agents")]
+    pub agents: Vec<crate::system::agent::AgentConfig>,
+    #[serde(default = "default_active_agent")]
+    pub active_agent: String,
     #[serde(default = "default_shells")]
-    pub shells: Vec<crate::system::shell::ShellConfig>,
+    pub shells: Vec<crate::system::app_shell::AppShell>,
     #[serde(default = "default_active_shell")]
     pub active_shell: String,
 }
@@ -68,8 +72,10 @@ pub fn default_light_blend() -> String { "multiply".to_string() }
 fn default_true() -> bool { true }
 fn default_speed() -> f32 { 1.0 }
 fn default_pattern() -> String { "plasma".to_string() }
-fn default_shells() -> Vec<crate::system::shell::ShellConfig> { Vec::new() }
-fn default_active_shell() -> String { "tot".to_string() }
+fn default_agents() -> Vec<crate::system::agent::AgentConfig> { Vec::new() }
+fn default_active_agent() -> String { "tot".to_string() }
+fn default_shells() -> Vec<crate::system::app_shell::AppShell> { Vec::new() }
+fn default_active_shell() -> String { "agent".to_string() }
 
 fn default_dark_colors() -> [f32; 9] {
     [0.12, 0.04, 0.24, 0.04, 0.14, 0.22, 0.18, 0.06, 0.20]
@@ -185,7 +191,7 @@ pub fn complete_onboarding_full(
     Ok(())
 }
 
-pub fn check_and_handle_onboarding_auto(_mem_handle: crate::mem::MemvidHandle, _shell_count: usize) {
+pub fn check_and_handle_onboarding_auto(_mem_handle: crate::mem::MemvidHandle, _app_count: usize) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         if !needs_onboarding() { return; }

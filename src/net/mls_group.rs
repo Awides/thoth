@@ -236,6 +236,10 @@ impl MlsGroupManager {
     pub fn has_group(&self, group_id: &str) -> bool {
         self.groups.contains_key(group_id)
     }
+
+    pub fn group_ids(&self) -> Vec<String> {
+        self.groups.keys().cloned().collect()
+    }
 }
 
 pub fn create_device_group(manager: &mut MlsGroupManager, device_ids: Vec<String>) -> Result<()> {
