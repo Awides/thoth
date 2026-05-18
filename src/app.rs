@@ -8,6 +8,7 @@ target_os = "android"
 use crate::llama;
 use crate::shared::{Message, MessageRole, MessageKind, LoadingState, Theme, CommandResult, now_secs, next_msg_id, hex_to_rgb, rgb_to_hex, push_system_msg};
 use crate::net::{NetRuntime, NetEvent};
+use crate::net::identity_pool::{IdentityPool, IdentityType, IdentityInfo};
 use crate::net::relay_inference::{InferenceRequest, InferenceResponse, DeviceCaps};
 #[cfg(target_arch = "wasm32")]
 use nostr_sdk::ToBech32;
@@ -133,7 +134,7 @@ fn default_system_prompt(lang: &str) -> String {
 
 fn splash_content(is_new_user: bool) -> String {
     if is_new_user {
-        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/agent` — view or switch agent personality\n- `/shell` — view or switch app context\n- `/groups` — list MLS groups\n- `/invite <pubkey>` — invite to active group\n- `/join <group_id>` — accept a pending invite\n- `/members` — list group members\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode\n- `/plasma` — configure background shader\n- `/plasma color` — pick shader colors\n- `/blend` — set text blend mode over shader\n- `/fullscreen` — toggle fullscreen (or F11)".to_string()
+        "# *THOTH▷*\n\nWelcome! Type to chat with **Tot**, or use:\n\n- `/login <phrase>` — restore your identity from a backup phrase\n- `/backup` — view your backup phrase\n- `/identity` — list or switch identities\n- `/agent` — view or switch agent personality\n- `/shell` — view or switch app context\n- `/groups` — list MLS groups\n- `/invite <pubkey>` — invite to active group\n- `/join <group_id>` — accept a pending invite\n- `/members` — list group members\n- `/system` — view or set the system prompt\n- `/theme` — toggle dark/light mode\n- `/plasma` — configure background shader\n- `/plasma color` — pick shader colors\n- `/blend` — set text blend mode over shader\n- `/fullscreen` — toggle fullscreen (or F11)".to_string()
     } else {
         "# *THOTH▷*".to_string()
     }
@@ -173,6 +174,10 @@ pub fn App() -> Element {
     let net_runtime = use_signal_sync(|| {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
         Arc::new(NetRuntime::new(tx))
+    });
+    let mut identity_pool = use_signal_sync(|| {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        IdentityPool::new(tx)
     });
     let mut net_connected = use_signal_sync(|| false);
 
@@ -872,29 +877,76 @@ return;
         let active_shell = shell_mgr.read().active().clone();
         let group_id = active_shell.channels.first().cloned().unwrap_or_else(|| "devices".to_string());
         let net_c = net.clone();
-        let gid = group_id.clone();
-        let mut ms_m = msgs.clone();
-        let mut nid_m = nid.clone();
-        spawn(async move {
-            let rt = net_c.read().clone();
-            match rt.get_group_members(&gid).await {
-                Ok(members) => {
-                    if members.is_empty() {
-                        push_system_msg(&mut ms_m, &mut nid_m, format!("No members found in group `{}`.", gid), MessageKind::Text);
-                    } else {
-                        let list: Vec<String> = members.iter().map(|m| format!("- `{}`", m.chars().take(12).collect::<String>())).collect();
-                        push_system_msg(&mut ms_m, &mut nid_m, format!("**Members of `{}`:**\n{}", gid, list.join("\n")), MessageKind::Text);
-                    }
-                }
-                Err(e) => {
-                    push_system_msg(&mut ms_m, &mut nid_m, format!("Error: {}", e), MessageKind::Text);
+    let gid = group_id.clone();
+    let mut ms_m = msgs.clone();
+    let mut nid_m = nid.clone();
+    spawn(async move {
+        let rt = net_c.read().clone();
+        match rt.get_group_members(&gid).await {
+            Ok(members) => {
+                if members.is_empty() {
+                    push_system_msg(&mut ms_m, &mut nid_m, format!("No members found in group `{}`.", gid), MessageKind::Text);
+                } else {
+                    let list: Vec<String> = members.iter().map(|m| format!("- `{}`", m.chars().take(12).collect::<String>())).collect();
+                    push_system_msg(&mut ms_m, &mut nid_m, format!("**Members of `{}`:**\n{}", gid, list.join("\n")), MessageKind::Text);
                 }
             }
-        });
-        return;
-    }
+            Err(e) => {
+                push_system_msg(&mut ms_m, &mut nid_m, format!("Error: {}", e), MessageKind::Text);
+            }
+        }
+    });
+    return;
+}
 
-    if trimmed == "/groups" {
+if trimmed == "/identity" || trimmed.starts_with("/identity ") {
+    let mut pool = identity_pool.clone();
+    let mut ms_id = msgs.clone();
+    let mut nid_id = nid.clone();
+    let mut net_c = net_runtime.clone();
+    let args = trimmed["/identity".len()..].trim();
+    if args.is_empty() {
+        let infos = pool.read().list();
+        if infos.is_empty() {
+            push_system_msg(&mut ms_id, &mut nid_id, "No identities loaded. Use `/login` to add one.".to_string(), MessageKind::Text);
+        } else {
+            let mut lines = vec!["**Identities:**\n".to_string()];
+            for info in &infos {
+                let fg = if info.is_foreground { " ◀ foreground" } else { "" };
+                let ty = match info.identity_type {
+                    IdentityType::User => "user",
+                    IdentityType::Agent => "agent",
+                };
+                lines.push(format!("- `{}` [{}] {}{}", &info.pubkey_hex[..8.min(info.pubkey_hex.len())], ty, info.label, fg));
+            }
+            push_system_msg(&mut ms_id, &mut nid_id, lines.join("\n"), MessageKind::Text);
+        }
+    } else if args.starts_with("switch ") {
+        let pk_prefix = args["switch ".len()..].trim().to_string();
+        let mut pool_w = pool.write();
+        let candidates: Vec<_> = pool_w.list().into_iter().filter(|i| i.pubkey_hex.starts_with(&pk_prefix)).collect();
+        if candidates.len() == 1 {
+            let pk = candidates[0].pubkey_hex.clone();
+            match pool_w.switch_foreground(&pk) {
+                Ok(()) => {
+                    let fg = pool_w.foreground().unwrap();
+                    net_c.set(fg.runtime.clone());
+                    push_system_msg(&mut ms_id, &mut nid_id, format!("Switched to '{}' ({})", fg.label, &fg.pubkey_hex[..8.min(fg.pubkey_hex.len())]), MessageKind::Text);
+                }
+                Err(e) => { push_system_msg(&mut ms_id, &mut nid_id, format!("Error: {}", e), MessageKind::Text); }
+            }
+        } else if candidates.is_empty() {
+            push_system_msg(&mut ms_id, &mut nid_id, format!("No identity matching `{}`", pk_prefix), MessageKind::Text);
+        } else {
+            push_system_msg(&mut ms_id, &mut nid_id, format!("Ambiguous prefix `{}` — matches {} identities", pk_prefix, candidates.len()), MessageKind::Text);
+        }
+    } else {
+        push_system_msg(&mut ms_id, &mut nid_id, "Usage: `/identity` — list identities, `/identity switch <pubkey_prefix>` — switch foreground".to_string(), MessageKind::Text);
+    }
+    return;
+}
+
+if trimmed == "/groups" {
         let net_c = net.clone();
         let mut ms_g = msgs.clone();
         let mut nid_g = nid.clone();
@@ -1076,9 +1128,11 @@ return;
                                 cfg.nostr_public_key = Some(public_bech32);
                                 cfg.device_name = Some(device_name);
                                 cfg.onboarding_completed = true;
-                                match cfg.save(&path) {
-                                    Ok(()) => {
-                                        let msg_id = nid();
+            match cfg.save(&path) {
+                Ok(()) => {
+                    let pk_hex = keys.public_key().to_hex();
+                    identity_pool.write().add(pk_hex, "user".to_string(), IdentityType::User).ok();
+                    let msg_id = nid();
                                         nid.set(msg_id + 1);
                                         let _ = msgs.with_mut(|v| v.push(Message {
                                             id: msg_id,
@@ -1166,14 +1220,12 @@ return;
             let shell_name = shell_mgr.read().active().name.clone();
             spawn(async move {
                 let rt = net_c.read().clone();
-                if rt.is_running().await {
-                    if let Some(pk) = rt.own_pubkey().await {
-                        if let Err(e) = rt.send_shell_text(&pk, &shell_name, content).await {
-                            tracing::warn!("Failed to send MLS group text: {}", e);
-                        }
-                    }
-                }
-            });
+if rt.is_running().await {
+    if let Err(e) = rt.send_shell_text(&shell_name, content).await {
+        tracing::warn!("Failed to send MLS group text: {}", e);
+    }
+}
+});
         }
         crate::system::app_shell::PublishMode::Local => {}
     }
@@ -1728,30 +1780,77 @@ let mut process_input = {
         let gid = group_id;
         let mut ms_m = msgs.clone();
         let mut nid_m = nid.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            match rt.get_group_members(&gid).await {
-                Ok(members) => {
-                    if members.is_empty() {
-                        push_system_msg(&mut ms_m, &mut nid_m, format!("No members found in group `{}`.", gid), MessageKind::Text);
-                    } else {
-                        let list: Vec<String> = members.iter().map(|m| format!("- `{}`", m.chars().take(12).collect::<String>())).collect();
-                        push_system_msg(&mut ms_m, &mut nid_m, format!("**Members of `{}`:**\n{}", gid, list.join("\n")), MessageKind::Text);
-                    }
-                }
-                Err(e) => {
-                    push_system_msg(&mut ms_m, &mut nid_m, format!("Error: {}", e), MessageKind::Text);
+    wasm_bindgen_futures::spawn_local(async move {
+        match rt.get_group_members(&gid).await {
+            Ok(members) => {
+                if members.is_empty() {
+                    push_system_msg(&mut ms_m, &mut nid_m, format!("No members found in group `{}`.", gid), MessageKind::Text);
+                } else {
+                    let list: Vec<String> = members.iter().map(|m| format!("- `{}`", m.chars().take(12).collect::<String>())).collect();
+                    push_system_msg(&mut ms_m, &mut nid_m, format!("**Members of `{}`:**\n{}", gid, list.join("\n")), MessageKind::Text);
                 }
             }
-        });
-        return;
-    }
+            Err(e) => {
+                push_system_msg(&mut ms_m, &mut nid_m, format!("Error: {}", e), MessageKind::Text);
+            }
+        }
+    });
+    return;
+}
 
-    if trimmed == "/groups" {
-        let rt = net.read().clone();
-        let mut ms_g = msgs.clone();
-        let mut nid_g = nid.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let groups = rt.list_groups().await;
+if trimmed == "/identity" || trimmed.starts_with("/identity ") {
+    let mut pool = identity_pool.clone();
+    let mut ms_id = msgs.clone();
+    let mut nid_id = nid.clone();
+    let mut net_c = net.clone();
+    let args = trimmed["/identity".len()..].trim();
+    if args.is_empty() {
+        let infos = pool.read().list();
+        if infos.is_empty() {
+            push_system_msg(&mut ms_id, &mut nid_id, "No identities loaded. Use `/login` to add one.".to_string(), MessageKind::Text);
+        } else {
+            let mut lines = vec!["**Identities:**\n".to_string()];
+            for info in &infos {
+                let fg = if info.is_foreground { " ◀ foreground" } else { "" };
+                let ty = match info.identity_type {
+                    IdentityType::User => "user",
+                    IdentityType::Agent => "agent",
+                };
+                lines.push(format!("- `{}` [{}] {}{}", &info.pubkey_hex[..8.min(info.pubkey_hex.len())], ty, info.label, fg));
+            }
+            push_system_msg(&mut ms_id, &mut nid_id, lines.join("\n"), MessageKind::Text);
+        }
+    } else if args.starts_with("switch ") {
+        let pk_prefix = args["switch ".len()..].trim().to_string();
+        let mut pool_w = pool.write();
+        let candidates: Vec<_> = pool_w.list().into_iter().filter(|i| i.pubkey_hex.starts_with(&pk_prefix)).collect();
+        if candidates.len() == 1 {
+            let pk = candidates[0].pubkey_hex.clone();
+            match pool_w.switch_foreground(&pk) {
+                Ok(()) => {
+                    let fg = pool_w.foreground().unwrap();
+                    net_c.set(fg.runtime.clone());
+                    push_system_msg(&mut ms_id, &mut nid_id, format!("Switched to '{}' ({})", fg.label, &fg.pubkey_hex[..8.min(fg.pubkey_hex.len())]), MessageKind::Text);
+                }
+                Err(e) => { push_system_msg(&mut ms_id, &mut nid_id, format!("Error: {}", e), MessageKind::Text); }
+            }
+        } else if candidates.is_empty() {
+            push_system_msg(&mut ms_id, &mut nid_id, format!("No identity matching `{}`", pk_prefix), MessageKind::Text);
+        } else {
+            push_system_msg(&mut ms_id, &mut nid_id, format!("Ambiguous prefix `{}` — matches {} identities", pk_prefix, candidates.len()), MessageKind::Text);
+        }
+    } else {
+        push_system_msg(&mut ms_id, &mut nid_id, "Usage: `/identity` — list identities, `/identity switch <pubkey_prefix>` — switch foreground".to_string(), MessageKind::Text);
+    }
+    return;
+}
+
+if trimmed == "/groups" {
+    let rt = net.read().clone();
+    let mut ms_g = msgs.clone();
+    let mut nid_g = nid.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let groups = rt.list_groups().await;
             if groups.is_empty() {
                 push_system_msg(&mut ms_g, &mut nid_g, "No MLS groups yet. Use `/invite` to add members or switch to a shell with `/shell`.".to_string(), MessageKind::Text);
             } else {
@@ -1801,14 +1900,16 @@ let mut process_input = {
                 push_system_msg(&mut msgs, &mut nid, "Usage: `/login <nsec1...>`".to_string(), MessageKind::Text);
                 return;
             }
-            if let Ok(keys) = nostr_sdk::Keys::parse(nsec_str) {
-                if let Some(window) = web_sys::window() {
-                    if let Ok(Some(storage)) = window.local_storage() {
-                        let _ = storage.set_item("thoth_nsec", nsec_str);
-                    }
-                }
-                let pk = keys.public_key().to_bech32().unwrap_or_else(|_| "unknown".to_string());
-                push_system_msg(&mut msgs, &mut nid, format!("Identity restored! Public key: `{}`\n\nReconnecting to Nostr...", pk), MessageKind::Text);
+    if let Ok(keys) = nostr_sdk::Keys::parse(nsec_str) {
+        if let Some(window) = web_sys::window() {
+            if let Ok(Some(storage)) = window.local_storage() {
+                let _ = storage.set_item("thoth_nsec", nsec_str);
+            }
+        }
+        let pk = keys.public_key().to_bech32().unwrap_or_else(|_| "unknown".to_string());
+        let pk_hex = keys.public_key().to_hex();
+        identity_pool.write().add(pk_hex, "user".to_string(), IdentityType::User).ok();
+        push_system_msg(&mut msgs, &mut nid, format!("Identity restored! Public key: `{}`\n\nReconnecting to Nostr...", pk), MessageKind::Text);
                 let rt = net.read().clone();
                 let mut nc = net_conn.clone();
                 wasm_bindgen_futures::spawn_local(async move {
@@ -2021,15 +2122,13 @@ let mut process_input = {
             let content = trimmed.clone();
             let shell_name = shell_mgr.read().active().name.clone();
             let connected = net_conn.peek().clone();
-            wasm_bindgen_futures::spawn_local(async move {
-                if connected && rt.is_running().await {
-                    if let Some(pk) = rt.own_pubkey().await {
-                        if let Err(e) = rt.send_shell_text(&pk, &shell_name, content).await {
-                            tracing::warn!("Failed to send MLS group text: {}", e);
-                        }
-                    }
-                }
-            });
+wasm_bindgen_futures::spawn_local(async move {
+    if connected && rt.is_running().await {
+        if let Err(e) = rt.send_shell_text(&shell_name, content).await {
+            tracing::warn!("Failed to send MLS group text: {}", e);
+        }
+    }
+});
         }
             crate::system::app_shell::PublishMode::Local => {}
         }

@@ -17,10 +17,14 @@ use tracing::{info, warn, error, trace};
 use nostr_sdk::prelude::*;
 
 use crate::net::{NostrClient, MlsGroupManager, RhaiEngine};
-use crate::net::relay_inference::{InferenceRelay, InferenceRequest, InferenceResponse, DeviceCaps, KIND_DEVICE_CAPS, KIND_MLS_INVITE};
+use crate::net::relay_inference::{InferenceRelay, InferenceRequest, InferenceResponse, DeviceCaps};
 use crate::net::group_registry::{GroupRegistry, GroupInfo, PendingInvite};
 
-static NET_RUNTIME_STARTED: AtomicBool = AtomicBool::new(false);
+pub static NET_CALLBACK_SET: AtomicBool = AtomicBool::new(false);
+
+pub fn is_net_initialized() -> bool {
+    NET_CALLBACK_SET.load(Ordering::SeqCst)
+}
 
 #[derive(Debug, Clone)]
 pub enum NetEvent {
@@ -53,6 +57,7 @@ pub struct NetRuntime {
     event_tx: mpsc::UnboundedSender<NetEvent>,
     on_event: Arc<std::sync::Mutex<Option<EventCallback>>>,
     running: Arc<Mutex<bool>>,
+    started: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn dispatch_event(event: NetEvent, event_tx: &mpsc::UnboundedSender<NetEvent>, on_event: &Arc<std::sync::Mutex<Option<EventCallback>>>) {
@@ -80,6 +85,7 @@ impl NetRuntime {
             event_tx,
             on_event: Arc::new(std::sync::Mutex::new(None)),
             running: Arc::new(Mutex::new(false)),
+            started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -90,7 +96,7 @@ impl NetRuntime {
     }
 
     pub async fn start(&self) -> Result<()> {
-        if NET_RUNTIME_STARTED.swap(true, Ordering::SeqCst) {
+        if self.started.swap(true, Ordering::SeqCst) {
             info!("Network runtime already started, skipping.");
             return Ok(());
         }
@@ -117,6 +123,10 @@ impl NetRuntime {
 
         self.start_nostr_listener().await?;
 
+        if let Err(e) = self.relay.publish_key_package(&pubkey).await {
+            warn!("Failed to publish key package: {}", e);
+        }
+
         {
             let mut running = self.running.lock().await;
             *running = true;
@@ -136,6 +146,10 @@ impl NetRuntime {
         *self.running.lock().await
     }
 
+    pub fn is_started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
+    }
+
     pub async fn public_key(&self) -> Option<String> {
         let nostr = self.nostr.lock().await;
         nostr.as_ref().map(|c| c.public_key())
@@ -146,23 +160,23 @@ impl NetRuntime {
         nostr.as_ref().map(|c| c.public_key_hex())
     }
 
-    pub async fn send_group_text(&self, target_pubkey: &str, content: String) -> Result<()> {
+    pub async fn send_group_text(&self, content: String) -> Result<()> {
         let registry = self.registry.lock().await;
         let group_id = registry.dm_group()
             .map(|g| g.group_id.clone())
             .unwrap_or_else(|| "devices".to_string());
         drop(registry);
-        self.relay.send_text(target_pubkey, &group_id, content).await
+        self.relay.send_text(&group_id, content).await
     }
 
-    pub async fn send_shell_text(&self, target_pubkey: &str, shell_name: &str, content: String) -> Result<()> {
+    pub async fn send_shell_text(&self, shell_name: &str, content: String) -> Result<()> {
         let group_id = {
             let registry = self.registry.lock().await;
             registry.group_for_shell(shell_name)
                 .map(|g| g.group_id.clone())
                 .unwrap_or_else(|| "devices".to_string())
         };
-        self.relay.send_text(target_pubkey, &group_id, content).await
+        self.relay.send_text(&group_id, content).await
     }
 
     pub async fn own_pubkey(&self) -> Option<String> {
@@ -174,7 +188,7 @@ impl NetRuntime {
         match best {
             Some(device) => {
                 info!("Routing inference request to {} (score={:.0})", device.device_name, device.score());
-                self.relay.send_inference_request(&device.pubkey, req).await
+                self.relay.send_inference_request(req).await
             }
             None => {
                 warn!("No inference-capable device found");
@@ -185,6 +199,10 @@ impl NetRuntime {
 
     pub async fn advertise_caps(&self, caps: DeviceCaps) -> Result<()> {
         self.relay.advertise_caps(caps).await
+    }
+
+    pub async fn get_known_devices(&self) -> Vec<DeviceCaps> {
+        self.relay.get_known_devices().await
     }
 
     pub async fn send_nostr_message(&self, content: String) -> Result<()> {
@@ -263,14 +281,14 @@ impl NetRuntime {
         let own_pk_for_filter = own_pk_hex.clone().and_then(|hex| PublicKey::from_hex(&hex).ok());
 
         let mut filter = Filter::new()
-            .kinds(vec![Kind::TextNote, Kind::GiftWrap, KIND_DEVICE_CAPS, KIND_MLS_INVITE])
+            .kinds(vec![Kind::TextNote, Kind::Custom(445), Kind::Custom(30443), Kind::GiftWrap])
             .limit(0);
 
         if let Some(pk) = &own_pk_for_filter {
             filter = filter.pubkey(*pk);
         }
 
-        client.subscribe(vec![filter], None).await?;
+        client.subscribe(filter, None).await?;
 
         let own_pk_hex = own_pk_hex.unwrap_or_default();
 
@@ -285,19 +303,25 @@ impl NetRuntime {
                     match notification {
                         RelayPoolNotification::Event { event, .. } => {
                             trace!("Received event kind={}", event.kind.as_u16());
-                            if event.kind == Kind::TextNote {
-                                if event.pubkey.to_hex() == own_pk_hex {
-                                    continue;
-                                }
-                                let mentions_us = event.tags.iter().any(|t| t.kind() == TagKind::p() && t.content() == Some(&own_pk_hex));
-                                let is_tot_query = event.content.to_lowercase().starts_with("@tot ");
-                                if mentions_us || is_tot_query {
-                                    dispatch_event(
-                                        NetEvent::NostrMessage { sender: event.pubkey.to_hex(), content: event.content.clone() },
-                                        &event_tx, &on_event,
-                                    );
-                                }
-                            } else if let Ok(relay_event) = relay.handle_event(&*event).await {
+                    if event.kind == Kind::TextNote {
+                        if event.pubkey.to_hex() == own_pk_hex {
+                            continue;
+                        }
+                        let mentions_us = event.tags.iter().any(|t| t.kind() == TagKind::p() && t.content() == Some(&own_pk_hex));
+                        let is_tot_query = event.content.to_lowercase().starts_with("@tot ");
+                        if mentions_us || is_tot_query {
+                            dispatch_event(
+                                NetEvent::NostrMessage { sender: event.pubkey.to_hex(), content: event.content.clone() },
+                                &event_tx, &on_event,
+                            );
+                        }
+                    } else if event.kind == Kind::Custom(30443) {
+                        if event.pubkey.to_hex() != own_pk_hex {
+                            let _ = relay.handle_key_package_event(&*event).await;
+                        }
+                    } else if event.kind == Kind::GiftWrap {
+                        let _ = relay.handle_gift_wrap(&*event).await;
+                    } else if let Ok(relay_event) = relay.handle_event(&*event).await {
                                 if let Some(ne) = relay_event_into_net_event(relay_event) {
                                     dispatch_event(ne, &event_tx, &on_event);
                                 }
@@ -324,19 +348,25 @@ impl NetRuntime {
                             match notification {
                                 RelayPoolNotification::Event { event, .. } => {
                                     trace!("Received event kind={}", event.kind.as_u16());
-                                    if event.kind == Kind::TextNote {
-                                        if event.pubkey.to_hex() == own_pk_hex {
-                                            continue;
-                                        }
-                                        let mentions_us = event.tags.iter().any(|t| t.kind() == TagKind::p() && t.content() == Some(&own_pk_hex));
-                                        let is_tot_query = event.content.to_lowercase().starts_with("@tot ");
-                                        if mentions_us || is_tot_query {
-                                            dispatch_event(
-                                                NetEvent::NostrMessage { sender: event.pubkey.to_hex(), content: event.content.clone() },
-                                                &event_tx, &on_event,
-                                            );
-                                        }
-                                    } else if let Ok(relay_event) = relay.handle_event(&*event).await {
+                        if event.kind == Kind::TextNote {
+                            if event.pubkey.to_hex() == own_pk_hex {
+                                continue;
+                            }
+                            let mentions_us = event.tags.iter().any(|t| t.kind() == TagKind::p() && t.content() == Some(&own_pk_hex));
+                            let is_tot_query = event.content.to_lowercase().starts_with("@tot ");
+                            if mentions_us || is_tot_query {
+                                dispatch_event(
+                                    NetEvent::NostrMessage { sender: event.pubkey.to_hex(), content: event.content.clone() },
+                                    &event_tx, &on_event,
+                                );
+                            }
+                        } else if event.kind == Kind::Custom(30443) {
+                            if event.pubkey.to_hex() != own_pk_hex {
+                                let _ = relay.handle_key_package_event(&*event).await;
+                            }
+                        } else if event.kind == Kind::GiftWrap {
+                            let _ = relay.handle_gift_wrap(&*event).await;
+                        } else if let Ok(relay_event) = relay.handle_event(&*event).await {
                                         if let Some(ne) = relay_event_into_net_event(relay_event) {
                                             dispatch_event(ne, &event_tx, &on_event);
                                         }
